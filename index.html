@@ -51,11 +51,8 @@ export function decodeDFPWM(bytes) {
       charge += (target - charge) * strength;
 
       // Fade-in first samples
-      if (sampleIndex < fadeSamples) {
-        fadeFactor = sampleIndex / fadeSamples;
-      } else {
-        fadeFactor = 1;
-      }
+      if (sampleIndex < fadeSamples) fadeFactor = sampleIndex / fadeSamples;
+      else fadeFactor = 1;
 
       output[sampleIndex++] = clamp(charge) * fadeFactor;
     }
@@ -71,11 +68,14 @@ const BRANCH = "main";
 
 let playlist = [];
 let currentIndex = 0;
+
 let audioCtx = null;
+let gainNode = null;
 let source = null;
+
 let isPlaying = false;
-let pcmGain = 0.25; // default volume
-let startTime = 0;
+let trackStartTime = 0;
+let pauseOffset = 0;
 let trackDuration = 0;
 let progressInterval = null;
 
@@ -84,6 +84,7 @@ const playPauseBtn = document.getElementById("playPause");
 const volumeSlider = document.getElementById("volume");
 const progressBar = document.getElementById("progress");
 
+// ==================== Playlist ====================
 async function fetchPlaylist() {
   const res = await fetch(`https://api.github.com/repos/${USER}/${REPO}/contents?ref=${BRANCH}`);
   const files = await res.json();
@@ -98,36 +99,54 @@ async function fetchPlaylist() {
   });
 }
 
+// ==================== Audio Helpers ====================
+async function fetchTrackPCM(trackName) {
+  const url = `https://raw.githubusercontent.com/${USER}/${REPO}/${BRANCH}/${trackName}`;
+  const res = await fetch(url);
+  const buffer = new Uint8Array(await res.arrayBuffer());
+  let pcm = decodeDFPWM(buffer);
+  return pcm;
+}
+
+function createSource(pcm) {
+  const audioBuffer = audioCtx.createBuffer(1, pcm.length, 48000);
+  audioBuffer.getChannelData(0).set(pcm);
+
+  const newSource = audioCtx.createBufferSource();
+  newSource.buffer = audioBuffer;
+  newSource.connect(gainNode);
+  newSource.onended = playNextTrack;
+
+  return { newSource, duration: audioBuffer.duration };
+}
+
+// ==================== Playback ====================
 async function playTrack(index) {
   stopTrack();
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
   currentIndex = index;
   highlightCurrentTrack();
 
-  const trackName = playlist[currentIndex];
-  const url = `https://raw.githubusercontent.com/${USER}/${REPO}/${BRANCH}/${trackName}`;
-  const res = await fetch(url);
-  const buffer = new Uint8Array(await res.arrayBuffer());
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = parseFloat(volumeSlider.value);
+    gainNode.connect(audioCtx.destination);
+  }
 
-  // Decode DFPWM
-  let pcm = decodeDFPWM(buffer);
-  for (let i = 0; i < pcm.length; i++) pcm[i] *= pcmGain; // apply volume
+  const pcm = await fetchTrackPCM(playlist[currentIndex]);
+  const { newSource, duration } = createSource(pcm);
 
-  const audioBuffer = audioCtx.createBuffer(1, pcm.length, 48000);
-  audioBuffer.getChannelData(0).set(pcm);
+  source = newSource;
+  trackDuration = duration;
 
-  source = audioCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(audioCtx.destination);
-  source.onended = playNextTrack;
-  source.start();
-
+  source.start(0, pauseOffset);
+  trackStartTime = audioCtx.currentTime - pauseOffset;
+  pauseOffset = 0;
   isPlaying = true;
-  startTime = audioCtx.currentTime;
-  trackDuration = audioBuffer.duration;
 
   startProgressUpdater();
+  playPauseBtn.textContent = "Pause";
 }
 
 function stopTrack() {
@@ -136,15 +155,21 @@ function stopTrack() {
     source.disconnect();
     source = null;
   }
+  pauseOffset = 0;
   isPlaying = false;
   stopProgressUpdater();
+  playPauseBtn.textContent = "Play";
 }
 
 function pauseTrack() {
   if (source && isPlaying) {
     source.stop();
+    source.disconnect();
+    pauseOffset = audioCtx.currentTime - trackStartTime;
+    source = null;
     isPlaying = false;
     stopProgressUpdater();
+    playPauseBtn.textContent = "Play";
   }
 }
 
@@ -164,29 +189,12 @@ function highlightCurrentTrack() {
   });
 }
 
-// ==================== UI Controls ====================
-playPauseBtn.addEventListener("click", () => {
-  if (!isPlaying) {
-    playTrack(currentIndex);
-  } else {
-    pauseTrack();
-    playPauseBtn.textContent = "Play";
-  }
-});
-
-document.getElementById("next").addEventListener("click", playNextTrack);
-document.getElementById("prev").addEventListener("click", playPrevTrack);
-document.getElementById("stop").addEventListener("click", stopTrack);
-
-volumeSlider.addEventListener("input", (e) => {
-  pcmGain = parseFloat(e.target.value);
-});
-
+// ==================== Progress ====================
 function startProgressUpdater() {
   stopProgressUpdater();
   progressInterval = setInterval(() => {
     if (!isPlaying) return;
-    const elapsed = audioCtx.currentTime - startTime;
+    const elapsed = audioCtx.currentTime - trackStartTime;
     const percent = Math.min(1, elapsed / trackDuration) * 100;
     progressBar.style.width = percent + "%";
   }, 100);
@@ -197,7 +205,21 @@ function stopProgressUpdater() {
   progressBar.style.width = "0%";
 }
 
-// ==================== Initialize ====================
+// ==================== Controls ====================
+playPauseBtn.addEventListener("click", () => {
+  if (isPlaying) pauseTrack();
+  else playTrack(currentIndex);
+});
+
+document.getElementById("next").addEventListener("click", playNextTrack);
+document.getElementById("prev").addEventListener("click", playPrevTrack);
+document.getElementById("stop").addEventListener("click", stopTrack);
+
+volumeSlider.addEventListener("input", (e) => {
+  if (gainNode) gainNode.gain.value = parseFloat(e.target.value);
+});
+
+// ==================== Init ====================
 fetchPlaylist();
 </script>
 </body>
