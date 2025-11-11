@@ -9,24 +9,10 @@
     li { padding: 0.25rem 0.5rem; cursor: pointer; }
     li.current { font-weight: bold; color: green; background: #f0f0f0; }
     button, input { margin-top: 0.5rem; margin-right: 0.5rem; }
-    #progressContainer {
-      width: 100%;
-      height: 10px;
-      background: #ccc;
-      border-radius: 5px;
-      overflow: hidden;
-      margin-top: 0.5rem;
-    }
-    #progressBar {
-      width: 0;
-      height: 100%;
-      background: green;
-    }
+    #progressContainer { width: 100%; height: 10px; background: #ccc; border-radius: 5px; overflow: hidden; margin-top: 0.5rem; }
+    #progressBar { width: 0; height: 100%; background: green; }
     #status { margin-bottom: 0.5rem; }
-    @media (max-width: 500px) {
-      body { padding: 1rem; }
-      ul { max-height: 150px; }
-    }
+    @media (max-width: 500px) { body { padding: 1rem; } ul { max-height: 150px; } }
   </style>
 </head>
 <body>
@@ -43,7 +29,6 @@
 
   <div>
     Volume: <input type="range" id="volumeControl" min="0" max="1" step="0.01" value="0.5">
-    Speed: <input type="range" id="speedControl" min="0.5" max="2" step="0.05" value="1">
   </div>
 
   <div id="progressContainer">
@@ -65,7 +50,6 @@
     const SHUFFLE_BTN = document.getElementById("shuffleBtn");
     const TRACK_LIST_EL = document.getElementById("trackList");
     const VOLUME_CTRL = document.getElementById("volumeControl");
-    const SPEED_CTRL = document.getElementById("speedControl");
     const PROGRESS_BAR = document.getElementById("progressBar");
     const TIME_DISPLAY = document.getElementById("timeDisplay");
 
@@ -78,15 +62,13 @@
     let currentIndex = 0;
     let isPlaying = false;
     let shuffleMode = false;
-    let sourceNode = null;
+    let sourceQueue = [];
     let currentBuffer = null;
+    let currentTimeOffset = 0;
+    const CHUNK_SIZE = 44100 * 2; // 2 seconds per chunk
 
     VOLUME_CTRL.addEventListener("input", () => {
       gainNode.gain.value = parseFloat(VOLUME_CTRL.value);
-    });
-
-    SPEED_CTRL.addEventListener("input", () => {
-      if(sourceNode) sourceNode.playbackRate.value = parseFloat(SPEED_CTRL.value);
     });
 
     SHUFFLE_BTN.addEventListener("click", () => {
@@ -94,33 +76,17 @@
       SHUFFLE_BTN.textContent = shuffleMode ? "🔀 Shuffle On" : "🔀 Shuffle Off";
     });
 
-    PREV_BTN.addEventListener("click", () => {
-      currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
-      startTrack();
-    });
-
-    NEXT_BTN.addEventListener("click", () => {
-      currentIndex = (currentIndex + 1) % playlist.length;
-      startTrack();
-    });
+    PREV_BTN.addEventListener("click", () => { currentIndex = (currentIndex - 1 + playlist.length) % playlist.length; startTrack(); });
+    NEXT_BTN.addEventListener("click", () => { currentIndex = (currentIndex + 1) % playlist.length; startTrack(); });
 
     PLAY_BTN.addEventListener("click", () => {
-      if(!isPlaying) {
-        startTrack();
-      } else {
-        stopTrack();
-      }
+      if(!isPlaying) startTrack(); else stopTrack();
     });
 
-    document.addEventListener("keydown", (e) => {
-      if(e.code === "Space") {
-        e.preventDefault();
-        PLAY_BTN.click();
-      } else if(e.code === "ArrowRight") {
-        NEXT_BTN.click();
-      } else if(e.code === "ArrowLeft") {
-        PREV_BTN.click();
-      }
+    document.addEventListener("keydown", e => {
+      if(e.code === "Space") { e.preventDefault(); PLAY_BTN.click(); }
+      else if(e.code === "ArrowRight") NEXT_BTN.click();
+      else if(e.code === "ArrowLeft") PREV_BTN.click();
     });
 
     function displayTrackList() {
@@ -129,10 +95,7 @@
         const li = document.createElement("li");
         li.textContent = track.name;
         li.dataset.index = i;
-        li.addEventListener("click", () => {
-          currentIndex = i;
-          startTrack();
-        });
+        li.addEventListener("click", () => { currentIndex = i; startTrack(); });
         TRACK_LIST_EL.appendChild(li);
       });
     }
@@ -148,23 +111,12 @@
         const apiUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents?ref=${BRANCH}`;
         const res = await fetch(apiUrl);
         const files = await res.json();
-        playlist = files
-          .filter(f => f.name.endsWith(".dfpwm"))
-          .map(f => ({ name: f.name, url: f.download_url }));
-
-        if(playlist.length === 0) {
-          STATUS.textContent = "No DFPWM files found!";
-        } else {
-          STATUS.textContent = `Found ${playlist.length} tracks.`;
-          PLAY_BTN.disabled = false;
-          PREV_BTN.disabled = false;
-          NEXT_BTN.disabled = false;
-          SHUFFLE_BTN.disabled = false;
-          displayTrackList();
-        }
-      } catch(err) {
-        STATUS.textContent = "Failed to load playlist: " + err;
-      }
+        playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => ({ name: f.name, url: f.download_url }));
+        if(!playlist.length) { STATUS.textContent = "No DFPWM files found!"; return; }
+        STATUS.textContent = `Found ${playlist.length} tracks.`;
+        PLAY_BTN.disabled = false; PREV_BTN.disabled = false; NEXT_BTN.disabled = false; SHUFFLE_BTN.disabled = false;
+        displayTrackList();
+      } catch(err) { STATUS.textContent = "Failed to load playlist: " + err; }
     }
 
     async function fetchDfpwm(url) {
@@ -178,63 +130,67 @@
       const track = playlist[currentIndex];
       highlightTrack(currentIndex);
       STATUS.textContent = `Playing: ${track.name}`;
-
       const bytes = await fetchDfpwm(track.url);
       const decoder = new DfpwmDecoder();
       const audioData = decoder.decode(bytes);
 
-      currentBuffer = audioCtx.createBuffer(1, audioData.length, 44100);
-      currentBuffer.getChannelData(0).set(audioData);
-
-      sourceNode = audioCtx.createBufferSource();
-      sourceNode.buffer = currentBuffer;
-      sourceNode.playbackRate.value = parseFloat(SPEED_CTRL.value);
-      sourceNode.connect(gainNode);
-
-      const startTime = audioCtx.currentTime;
+      currentBuffer = audioData;
+      currentTimeOffset = 0;
       isPlaying = true;
       PLAY_BTN.textContent = "⏸ Pause";
 
-      function updateProgress() {
-        if(!isPlaying || !currentBuffer) return;
-        const elapsed = audioCtx.currentTime - startTime;
-        const duration = currentBuffer.duration;
-        PROGRESS_BAR.style.width = Math.min((elapsed / duration) * 100, 100) + "%";
-        TIME_DISPLAY.textContent = formatTime(elapsed) + " / " + formatTime(duration);
-        if(elapsed < duration) requestAnimationFrame(updateProgress);
-      }
-      updateProgress();
+      playNextChunk();
+    }
 
-      sourceNode.onended = () => {
+    function playNextChunk() {
+      if(!isPlaying || currentTimeOffset >= currentBuffer.length) {
+        // Track ended
         isPlaying = false;
         PLAY_BTN.textContent = "▶ Play";
         PROGRESS_BAR.style.width = "0%";
         TIME_DISPLAY.textContent = "00:00 / 00:00";
-        // Next track
-        if(shuffleMode) {
-          currentIndex = Math.floor(Math.random() * playlist.length);
-        } else {
-          currentIndex = (currentIndex + 1) % playlist.length;
-        }
+        if(shuffleMode) currentIndex = Math.floor(Math.random() * playlist.length);
+        else currentIndex = (currentIndex + 1) % playlist.length;
         startTrack();
-      };
+        return;
+      }
 
-      sourceNode.start();
+      const chunkEnd = Math.min(currentTimeOffset + CHUNK_SIZE, currentBuffer.length);
+      const chunkData = currentBuffer.slice(currentTimeOffset, chunkEnd);
+
+      const bufferNode = audioCtx.createBuffer(1, chunkData.length, 44100);
+      bufferNode.getChannelData(0).set(chunkData);
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = bufferNode;
+      source.connect(gainNode);
+
+      source.onended = () => { currentTimeOffset += CHUNK_SIZE; playNextChunk(); };
+
+      source.start();
+      sourceQueue.push(source);
+
+      // Update progress
+      const totalDuration = currentBuffer.length / 44100;
+      const elapsed = currentTimeOffset / 44100;
+      PROGRESS_BAR.style.width = Math.min((elapsed / totalDuration) * 100, 100) + "%";
+      TIME_DISPLAY.textContent = formatTime(elapsed) + " / " + formatTime(totalDuration);
+
+      requestAnimationFrame(() => {
+        if(isPlaying) playNextChunk(); // schedule next if needed
+      });
     }
 
     function stopTrack() {
-      if(sourceNode) {
-        sourceNode.stop();
-        sourceNode.disconnect();
-        sourceNode = null;
-      }
       isPlaying = false;
       PLAY_BTN.textContent = "▶ Play";
+      sourceQueue.forEach(s => s.stop());
+      sourceQueue = [];
     }
 
     function formatTime(sec) {
-      const m = Math.floor(sec / 60).toString().padStart(2, "0");
-      const s = Math.floor(sec % 60).toString().padStart(2, "0");
+      const m = Math.floor(sec / 60).toString().padStart(2,"0");
+      const s = Math.floor(sec % 60).toString().padStart(2,"0");
       return `${m}:${s}`;
     }
 
