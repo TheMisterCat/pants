@@ -43,6 +43,7 @@ canvas { background:#222; border:1px solid #444; }
 const USER = "TheMisterCat";
 const REPO = "pants";
 const AUDIO_DIR = ""; // root
+const DFPWM_VOLUME_SCALING = 0.15; // adjust safe volume
 
 // --- GLOBALS ---
 let audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -58,8 +59,11 @@ let currentBufferSource = null;
 let currentTrackIndex = 0;
 let playlist = [];
 let isPlaying = false;
+let autoplay = false;
 let trackStartTime = 0;
 let currentAudioBuffer = null;
+let waveformFrame = null;
+let peakFrame = null;
 
 // Canvas
 const waveformCanvas = document.getElementById("waveform");
@@ -79,13 +83,11 @@ function decodeDFPWM(bytes) {
       const target = bit ? 1 : -1;
       charge += (target - charge) * strength;
       let smoothed = charge * 0.95 + (sampleIndex > 0 ? 0.05 * output[sampleIndex - 1] : 0);
-
       // soft limiter
       const threshold = 0.9;
       if (smoothed > threshold) smoothed = threshold + (smoothed - threshold) * 0.2;
       if (smoothed < -threshold) smoothed = -threshold + (smoothed + threshold) * 0.2;
-
-      output[sampleIndex++] = smoothed;
+      output[sampleIndex++] = smoothed * DFPWM_VOLUME_SCALING;
     }
   }
   return output;
@@ -126,9 +128,10 @@ async function fetchAndDecode(track) {
 }
 
 // --- Playback ---
-async function playTrack(index) {
-  stopTrack();
+async function playTrack(index, enableAutoplay=true) {
+  stopTrack(); // ensures only one source exists
   currentTrackIndex = index;
+  autoplay = enableAutoplay;
   updateActiveTrack();
 
   currentAudioBuffer = await fetchAndDecode(playlist[index]);
@@ -137,7 +140,7 @@ async function playTrack(index) {
   source.connect(gainNode);
   source.start(0);
   trackStartTime = audioContext.currentTime;
-  source.onended = () => { nextTrack(); };
+  source.onended = () => { if (autoplay) nextTrack(); };
   currentBufferSource = source;
   isPlaying = true;
 
@@ -146,14 +149,19 @@ async function playTrack(index) {
 }
 
 function stopTrack() {
+  autoplay = false;
   if (currentBufferSource) {
     currentBufferSource.stop();
     currentBufferSource.disconnect();
     currentBufferSource = null;
-    isPlaying = false;
   }
+  isPlaying = false;
+  cancelAnimationFrame(waveformFrame);
+  cancelAnimationFrame(peakFrame);
+  progressEl.value = 0;
 }
 
+// Pause/resume
 function pauseTrack() {
   if (!audioContext) return;
   if (audioContext.state === "running") audioContext.suspend();
@@ -198,23 +206,27 @@ function updateProgress() {
   const bufferLength = currentBufferSource.buffer.length / currentBufferSource.buffer.sampleRate;
   const elapsed = audioContext.currentTime - trackStartTime;
   progressEl.value = Math.min(100, (elapsed / bufferLength) * 100);
-  requestAnimationFrame(updateProgress);
+  waveformFrame = requestAnimationFrame(updateProgress);
 }
 
 // --- Waveform & Peak Drawing ---
 function drawWaveform() {
   if (!currentAudioBuffer) return;
-
   const data = currentAudioBuffer.getChannelData(0);
   const w = waveformCanvas.width;
   const h = waveformCanvas.height;
+
+  // normalize for visualization
+  const maxVal = Math.max(...data.map(Math.abs)) || 1;
+
   waveformCtx.clearRect(0,0,w,h);
   waveformCtx.strokeStyle = "#0f0";
   waveformCtx.beginPath();
   const step = Math.ceil(data.length / w);
   for (let i=0;i<w;i++){
-    const min = Math.min(...data.slice(i*step, (i+1)*step));
-    const max = Math.max(...data.slice(i*step, (i+1)*step));
+    const slice = data.slice(i*step, (i+1)*step);
+    const min = Math.min(...slice)/maxVal;
+    const max = Math.max(...slice)/maxVal;
     waveformCtx.moveTo(i,h/2 - min*h/2);
     waveformCtx.lineTo(i,h/2 - max*h/2);
   }
@@ -225,7 +237,6 @@ function drawWaveform() {
 
 function drawPeak() {
   if (!currentAudioBuffer || !isPlaying) return;
-
   const data = currentAudioBuffer.getChannelData(0);
   const elapsedSamples = Math.floor((audioContext.currentTime - trackStartTime) * currentAudioBuffer.sampleRate);
   const currentSample = Math.min(elapsedSamples, data.length-1);
@@ -234,8 +245,8 @@ function drawPeak() {
   peakCtx.clearRect(0,0,peakCanvas.width, peakCanvas.height);
   peakCtx.fillStyle = "#f00";
   peakCtx.fillRect(0, peakCanvas.height*(1-peak), peakCanvas.width, peakCanvas.height*peak);
-  
-  requestAnimationFrame(drawPeak);
+
+  peakFrame = requestAnimationFrame(drawPeak);
 }
 
 // --- Initialize ---
