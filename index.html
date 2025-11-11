@@ -2,16 +2,69 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>DFPWM Radio</title>
+<title>DFPWM Radio Player</title>
+<style>
+  body { font-family: sans-serif; margin: 2em; }
+  #controls button { margin: 0.2em; }
+  #volume { width: 150px; }
+  #progressContainer { width: 300px; height: 10px; background: #ddd; margin-top: 0.5em; position: relative; }
+  #progress { height: 100%; width: 0%; background: #3a9; }
+  #trackList li { cursor: pointer; }
+  #trackList li.current { font-weight: bold; }
+</style>
 </head>
 <body>
 <h1>DFPWM Radio</h1>
+
 <ul id="trackList"></ul>
-<button id="playRadio">Play Radio</button>
+
+<div id="controls">
+  <button id="prev">Prev</button>
+  <button id="playPause">Play</button>
+  <button id="stop">Stop</button>
+  <button id="next">Next</button>
+  Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.25">
+</div>
+
+<div id="progressContainer">
+  <div id="progress"></div>
+</div>
 
 <script type="module">
-import { decodeDFPWM } from './js/dfpwm.js';
+// ==================== DFPWM Decoder ====================
+export function decodeDFPWM(bytes) {
+  let charge = 0;
+  const strength = 0.25; // smoothing factor
+  const output = new Float32Array(bytes.length * 8);
 
+  const clamp = (v) => Math.max(-1, Math.min(1, v));
+  let sampleIndex = 0;
+
+  // Fade-in first few samples to remove click
+  const fadeSamples = 32;
+  let fadeFactor = 0;
+
+  for (let byte of bytes) {
+    for (let i = 0; i < 8; i++) {
+      const bit = (byte >> i) & 1;
+      const target = bit ? 1 : -1;
+      charge += (target - charge) * strength;
+
+      // Fade-in first samples
+      if (sampleIndex < fadeSamples) {
+        fadeFactor = sampleIndex / fadeSamples;
+      } else {
+        fadeFactor = 1;
+      }
+
+      output[sampleIndex++] = clamp(charge) * fadeFactor;
+    }
+  }
+
+  return output;
+}
+
+// ==================== Player Script ====================
 const USER = "TheMisterCat";
 const REPO = "pants";
 const BRANCH = "main";
@@ -20,13 +73,22 @@ let playlist = [];
 let currentIndex = 0;
 let audioCtx = null;
 let source = null;
+let isPlaying = false;
+let pcmGain = 0.25; // default volume
+let startTime = 0;
+let trackDuration = 0;
+let progressInterval = null;
+
+const trackListEl = document.getElementById("trackList");
+const playPauseBtn = document.getElementById("playPause");
+const volumeSlider = document.getElementById("volume");
+const progressBar = document.getElementById("progress");
 
 async function fetchPlaylist() {
   const res = await fetch(`https://api.github.com/repos/${USER}/${REPO}/contents?ref=${BRANCH}`);
   const files = await res.json();
   playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
 
-  const trackListEl = document.getElementById("trackList");
   trackListEl.innerHTML = "";
   playlist.forEach((name, idx) => {
     const li = document.createElement("li");
@@ -37,20 +99,21 @@ async function fetchPlaylist() {
 }
 
 async function playTrack(index) {
+  stopTrack();
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-  if (source) source.stop();
-
   currentIndex = index;
+  highlightCurrentTrack();
+
   const trackName = playlist[currentIndex];
   const url = `https://raw.githubusercontent.com/${USER}/${REPO}/${BRANCH}/${trackName}`;
   const res = await fetch(url);
   const buffer = new Uint8Array(await res.arrayBuffer());
 
   // Decode DFPWM
-  const pcm = decodeDFPWM(buffer);
+  let pcm = decodeDFPWM(buffer);
+  for (let i = 0; i < pcm.length; i++) pcm[i] *= pcmGain; // apply volume
 
-  // Create AudioBuffer
   const audioBuffer = audioCtx.createBuffer(1, pcm.length, 48000);
   audioBuffer.getChannelData(0).set(pcm);
 
@@ -59,6 +122,30 @@ async function playTrack(index) {
   source.connect(audioCtx.destination);
   source.onended = playNextTrack;
   source.start();
+
+  isPlaying = true;
+  startTime = audioCtx.currentTime;
+  trackDuration = audioBuffer.duration;
+
+  startProgressUpdater();
+}
+
+function stopTrack() {
+  if (source) {
+    source.stop();
+    source.disconnect();
+    source = null;
+  }
+  isPlaying = false;
+  stopProgressUpdater();
+}
+
+function pauseTrack() {
+  if (source && isPlaying) {
+    source.stop();
+    isPlaying = false;
+    stopProgressUpdater();
+  }
 }
 
 function playNextTrack() {
@@ -66,13 +153,52 @@ function playNextTrack() {
   playTrack(currentIndex);
 }
 
-document.getElementById("playRadio").addEventListener("click", () => {
-  if (playlist.length > 0) playTrack(0);
+function playPrevTrack() {
+  currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+  playTrack(currentIndex);
+}
+
+function highlightCurrentTrack() {
+  Array.from(trackListEl.children).forEach((li, idx) => {
+    li.classList.toggle("current", idx === currentIndex);
+  });
+}
+
+// ==================== UI Controls ====================
+playPauseBtn.addEventListener("click", () => {
+  if (!isPlaying) {
+    playTrack(currentIndex);
+  } else {
+    pauseTrack();
+    playPauseBtn.textContent = "Play";
+  }
 });
 
+document.getElementById("next").addEventListener("click", playNextTrack);
+document.getElementById("prev").addEventListener("click", playPrevTrack);
+document.getElementById("stop").addEventListener("click", stopTrack);
+
+volumeSlider.addEventListener("input", (e) => {
+  pcmGain = parseFloat(e.target.value);
+});
+
+function startProgressUpdater() {
+  stopProgressUpdater();
+  progressInterval = setInterval(() => {
+    if (!isPlaying) return;
+    const elapsed = audioCtx.currentTime - startTime;
+    const percent = Math.min(1, elapsed / trackDuration) * 100;
+    progressBar.style.width = percent + "%";
+  }, 100);
+}
+
+function stopProgressUpdater() {
+  if (progressInterval) clearInterval(progressInterval);
+  progressBar.style.width = "0%";
+}
+
+// ==================== Initialize ====================
 fetchPlaylist();
 </script>
 </body>
 </html>
-
-
