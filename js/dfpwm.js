@@ -1,19 +1,23 @@
-// Browser-compatible DFPWM decoder (streaming)
-export class DfpwmDecoder {
-  constructor() {
-    this.charge = 0;
-    this.output = 0;
+// dfpwm.js
+export function decodeDFPWM(bytes) {
+  // DFPWM state variables
+  let charge = 0;
+  let lastbit = 0;
+  const output = new Float32Array(bytes.length * 8); // 8 samples per byte
+
+  let sampleIndex = 0;
+  for (let byte of bytes) {
+    for (let i = 0; i < 8; i++) {
+      let bit = (byte >> i) & 1;
+      // AUKit decoding logic
+      let delta = bit ? 1 : -1;
+      charge += delta * (1 - 0.5); // strength from AUKit (~0.5)
+      if (charge > 1) charge = 1;
+      if (charge < -1) charge = -1;
+      output[sampleIndex++] = charge;
+      lastbit = bit;
+    }
   }
 
-  decode(bytes) {
-    const out = new Float32Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) {
-      const bit = bytes[i] > 127 ? 1 : 0; // DFPWM bits
-      this.charge += (bit ? 1 : -1) - this.charge >> 3;
-      this.output += this.charge;
-      // Clamp and convert to float32 in [-1,1]
-      out[i] = Math.max(-128, Math.min(127, this.output)) / 128;
-    }
-    return out;
-  }
+  return output;
 }
