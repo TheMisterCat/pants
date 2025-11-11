@@ -1,274 +1,163 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>SMRT Radio</title>
 <style>
-  body { font-family: sans-serif; margin:2em; background:#f5f5f5; color:#222; }
-  h1 { margin-bottom: 0.5em; }
-  #controls button { margin: 0.2em; }
-  #volume, #filterFreq { width: 150px; }
-  #progressContainer { width: 300px; height: 10px; background: #ddd; margin-top: 0.5em; position: relative; cursor: pointer; }
-  #progress { height: 100%; width: 0%; background: #3a9; }
-  #trackList { margin-top: 2em; list-style: none; padding: 0; }
-  #trackList li { cursor: pointer; padding: 0.2em 0; }
-  #trackList li.current { font-weight: bold; color: #3a9; }
+  body { font-family: sans-serif; margin: 20px; background:#111; color:#eee; }
+  h1 { text-align:center; }
+  #controls { display:flex; justify-content:center; gap:10px; margin-bottom:10px; }
+  #progress { width: 80%; margin: 0 auto; display:block; }
+  #volume { width: 150px; }
+  #playlist { margin-top:20px; max-height:300px; overflow-y:auto; border-top:1px solid #444; padding-top:10px;}
+  .track { cursor:pointer; padding:5px; }
+  .track.active { background:#444; }
 </style>
 </head>
 <body>
 <h1>SMRT Radio</h1>
 
-<!-- Controls -->
 <div id="controls">
-  <button id="prev">Prev</button>
-  <button id="playPause">Play</button>
-  <button id="stop">Stop</button>
-  <button id="next">Next</button>
-  Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.25">
-  Treble: <input type="range" id="filterFreq" min="1000" max="16000" step="500" value="8000">
+  <button id="prev">⏮ Prev</button>
+  <button id="play">▶ Play</button>
+  <button id="pause">⏸ Pause</button>
+  <button id="stop">⏹ Stop</button>
+  <button id="next">⏭ Next</button>
+  Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5">
 </div>
+<input type="range" id="progress" value="0" min="0" max="100">
 
-<!-- Progress bar -->
-<div id="progressContainer">
-  <div id="progress"></div>
-</div>
+<div id="playlist"></div>
 
-<!-- Track list -->
-<ul id="trackList"></ul>
+<script>
+// --- CONFIG ---
+const USER = "TheMisterCat";
+const REPO = "pants";
+const AUDIO_DIR = ""; // root
 
-<script type="module">
-// ==================== Improved DFPWM Decoder ====================
-export function decodeDFPWM(bytes) {
+// --- GLOBALS ---
+let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+let gainNode = audioContext.createGain();
+gainNode.connect(audioContext.destination);
+gainNode.gain.value = 0.5;
+
+let currentBufferSource = null;
+let currentTrackIndex = 0;
+let playlist = [];
+let isPlaying = false;
+
+// --- DFPWM Decoder (full dynamic range) ---
+function decodeDFPWM(bytes) {
   let charge = 0;
   const strength = 0.25;
   const output = new Float32Array(bytes.length * 8);
   let sampleIndex = 0;
 
-  const MAX_GAIN = 0.15;  // Reduced gain to prevent oversaturation
-  const fadeSamples = 32;
-
   for (let byte of bytes) {
     for (let i = 0; i < 8; i++) {
       const bit = (byte >> i) & 1;
       const target = bit ? 1 : -1;
-
-      // Smooth transition
       charge += (target - charge) * strength;
 
-      // Soft clipping / dynamic compression
-      let sample = charge * MAX_GAIN;
-      if (sample > 1) sample = 1;
-      else if (sample < -1) sample = -1;
-
-      // Optional fade-in for first few samples to prevent clicks
-      const fadeFactor = sampleIndex < fadeSamples ? sampleIndex / fadeSamples : 1;
-
-      // Optional smoothing (average with previous)
-      if (sampleIndex > 0) sample = 0.8 * sample + 0.2 * output[sampleIndex - 1];
-
-      output[sampleIndex++] = sample * fadeFactor;
+      // Slight fade-in first sample to avoid clicks
+      output[sampleIndex++] = charge * 0.95 + (sampleIndex < 5 ? sampleIndex * 0.01 : 0);
     }
   }
   return output;
 }
 
-// ==================== Player Script ====================
-const USER = "TheMisterCat";
-const REPO = "pants";
-const BRANCH = "main";
-
-let playlist = [];
-let currentIndex = 0;
-
-let audioCtx = null;
-let gainNode = null;
-let audioFilter = null;
-let source = null;
-
-let isPlaying = false;
-let isLoadingTrack = false;
-let trackStartTime = 0;
-let pauseOffset = 0;
-let trackDuration = 0;
-let progressInterval = null;
-
-const trackListEl = document.getElementById("trackList");
-const playPauseBtn = document.getElementById("playPause");
-const volumeSlider = document.getElementById("volume");
-const filterFreqSlider = document.getElementById("filterFreq");
-const progressBar = document.getElementById("progress");
-const progressContainer = document.getElementById("progressContainer");
-
-// ==================== Playlist ====================
-async function fetchPlaylist() {
-  const res = await fetch(`https://api.github.com/repos/${USER}/${REPO}/contents?ref=${BRANCH}`);
-  const files = await res.json();
-  playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
-
-  trackListEl.innerHTML = "";
-  playlist.forEach((name, idx) => {
-    const li = document.createElement("li");
-    li.textContent = name;
-    li.addEventListener("click", () => playTrack(idx));
-    trackListEl.appendChild(li);
+// --- Load playlist from GitHub ---
+async function loadPlaylist() {
+  const url = `https://api.github.com/repos/${USER}/${REPO}/contents/${AUDIO_DIR}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  playlist = data.filter(f => f.name.endsWith(".dfpwm"));
+  renderPlaylist();
+}
+function renderPlaylist() {
+  const container = document.getElementById("playlist");
+  container.innerHTML = "";
+  playlist.forEach((track, i) => {
+    const div = document.createElement("div");
+    div.textContent = track.name;
+    div.className = "track" + (i===currentTrackIndex ? " active" : "");
+    div.onclick = () => { playTrack(i); };
+    container.appendChild(div);
   });
 }
 
-// ==================== Audio Helpers ====================
-async function fetchTrackPCM(trackName) {
-  const url = `https://raw.githubusercontent.com/${USER}/${REPO}/${BRANCH}/${trackName}`;
+// --- Fetch and decode a dfpwm file ---
+async function fetchAndDecode(track) {
+  const url = `https://raw.githubusercontent.com/${USER}/${REPO}/main/${AUDIO_DIR}${track.name}`;
   const res = await fetch(url);
-  const buffer = new Uint8Array(await res.arrayBuffer());
-  return decodeDFPWM(buffer);
+  const arrayBuffer = await res.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  const floatSamples = decodeDFPWM(bytes);
+
+  const audioBuffer = audioContext.createBuffer(1, floatSamples.length, 48000);
+  audioBuffer.getChannelData(0).set(floatSamples);
+  return audioBuffer;
 }
 
-function createSource(pcm) {
-  const audioBuffer = audioCtx.createBuffer(1, pcm.length, 48000);
-  audioBuffer.getChannelData(0).set(pcm);
-
-  const newSource = audioCtx.createBufferSource();
-  newSource.buffer = audioBuffer;
-  newSource.connect(audioFilter);
-  newSource.onended = () => {
-    isPlaying = false;
-    stopProgressUpdater();
-    playNextTrack();
-  };
-
-  return { newSource, duration: audioBuffer.duration };
-}
-
-// ==================== Playback ====================
+// --- Playback ---
 async function playTrack(index) {
-  if (isLoadingTrack) return;
-  isLoadingTrack = true;
-
   stopTrack();
-  currentIndex = index;
-  highlightCurrentTrack();
+  currentTrackIndex = index;
+  updateActiveTrack();
 
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-    gainNode = audioCtx.createGain();
-    gainNode.gain.value = parseFloat(volumeSlider.value);
-
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.value = parseFloat(filterFreqSlider.value);
-    filter.Q.value = 1;
-
-    filter.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    audioFilter = filter;
-  }
-
-  try {
-    const pcm = await fetchTrackPCM(playlist[currentIndex]);
-    const { newSource, duration } = createSource(pcm);
-
-    source = newSource;
-    trackDuration = duration;
-
-    source.start(0, pauseOffset);
-    trackStartTime = audioCtx.currentTime - pauseOffset;
-    pauseOffset = 0;
-    isPlaying = true;
-
-    startProgressUpdater();
-    playPauseBtn.textContent = "Pause";
-  } finally {
-    isLoadingTrack = false;
-  }
+  const buffer = await fetchAndDecode(playlist[index]);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(gainNode);
+  source.start(0);
+  source.onended = () => { nextTrack(); };
+  currentBufferSource = source;
+  isPlaying = true;
 }
 
 function stopTrack() {
-  if (source) {
-    source.stop();
-    source.disconnect();
-    source = null;
+  if (currentBufferSource) {
+    currentBufferSource.stop();
+    currentBufferSource.disconnect();
+    currentBufferSource = null;
+    isPlaying = false;
   }
-  pauseOffset = 0;
-  isPlaying = false;
-  stopProgressUpdater();
-  playPauseBtn.textContent = "Play";
 }
 
 function pauseTrack() {
-  if (source && isPlaying) {
-    source.stop();
-    source.disconnect();
-    pauseOffset = audioCtx.currentTime - trackStartTime;
-    source = null;
-    isPlaying = false;
-    stopProgressUpdater();
-    playPauseBtn.textContent = "Play";
-  }
+  if (audioContext.state === "running") audioContext.suspend();
+  else audioContext.resume();
 }
 
-function playNextTrack() {
-  currentIndex = (currentIndex + 1) % playlist.length;
-  playTrack(currentIndex);
+function nextTrack() {
+  currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+  playTrack(currentTrackIndex);
+}
+function prevTrack() {
+  currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+  playTrack(currentTrackIndex);
 }
 
-function playPrevTrack() {
-  currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
-  playTrack(currentIndex);
-}
-
-function highlightCurrentTrack() {
-  Array.from(trackListEl.children).forEach((li, idx) => {
-    li.classList.toggle("current", idx === currentIndex);
+function updateActiveTrack() {
+  document.querySelectorAll(".track").forEach((el,i)=>{
+    el.classList.toggle("active", i===currentTrackIndex);
   });
 }
 
-// ==================== Progress ====================
-function startProgressUpdater() {
-  stopProgressUpdater();
-  progressInterval = setInterval(() => {
-    if (!isPlaying) return;
-    const elapsed = audioCtx.currentTime - trackStartTime;
-    const percent = Math.min(1, elapsed / trackDuration) * 100;
-    progressBar.style.width = percent + "%";
-  }, 100);
-}
-
-function stopProgressUpdater() {
-  if (progressInterval) clearInterval(progressInterval);
-  progressBar.style.width = "0%";
-}
-
-progressContainer.addEventListener("click", (e) => {
-  if (!source) return;
-
-  const rect = progressContainer.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const clickPercent = clickX / rect.width;
-
-  pauseOffset = trackDuration * clickPercent;
-  playTrack(currentIndex);
+// --- Volume Control ---
+document.getElementById("volume").addEventListener("input", e=>{
+  gainNode.gain.value = parseFloat(e.target.value);
 });
 
-// ==================== Controls ====================
-playPauseBtn.addEventListener("click", () => {
-  if (isPlaying) pauseTrack();
-  else playTrack(currentIndex);
-});
+// --- Control Buttons ---
+document.getElementById("play").onclick = () => playTrack(currentTrackIndex);
+document.getElementById("stop").onclick = stopTrack;
+document.getElementById("pause").onclick = pauseTrack;
+document.getElementById("next").onclick = nextTrack;
+document.getElementById("prev").onclick = prevTrack;
 
-document.getElementById("next").addEventListener("click", playNextTrack);
-document.getElementById("prev").addEventListener("click", playPrevTrack);
-document.getElementById("stop").addEventListener("click", stopTrack);
-
-volumeSlider.addEventListener("input", (e) => {
-  if (gainNode) gainNode.gain.value = parseFloat(e.target.value);
-});
-
-filterFreqSlider.addEventListener("input", (e) => {
-  if (audioFilter) audioFilter.frequency.value = parseFloat(e.target.value);
-});
-
-// ==================== Init ====================
-fetchPlaylist();
+// --- Initialize ---
+loadPlaylist();
 </script>
 </body>
 </html>
