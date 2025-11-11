@@ -49,7 +49,7 @@ export function decodeDFPWM(bytes) {
       charge += (target - charge) * strength;
 
       const fadeFactor = sampleIndex < fadeSamples ? sampleIndex / fadeSamples : 1;
-      output[sampleIndex++] = Math.max(-1, Math.min(1, charge)) * 0.3 * fadeFactor; // normalized
+      output[sampleIndex++] = Math.max(-1, Math.min(1, charge)) * 0.3 * fadeFactor;
     }
   }
   return output;
@@ -65,10 +65,11 @@ let currentIndex = 0;
 
 let audioCtx = null;
 let gainNode = null;
+let audioFilter = null;
 let source = null;
 
 let isPlaying = false;
-let isLoadingTrack = false; // prevents multiple simultaneous loads
+let isLoadingTrack = false;
 let trackStartTime = 0;
 let pauseOffset = 0;
 let trackDuration = 0;
@@ -109,26 +110,42 @@ function createSource(pcm) {
 
   const newSource = audioCtx.createBufferSource();
   newSource.buffer = audioBuffer;
-  newSource.connect(gainNode);
-  newSource.onended = playNextTrack;
+  newSource.connect(audioFilter);
+  newSource.onended = () => {
+    isPlaying = false;
+    stopProgressUpdater();
+    playNextTrack();
+  };
 
   return { newSource, duration: audioBuffer.duration };
 }
 
 // ==================== Playback ====================
 async function playTrack(index) {
-  if (isLoadingTrack) return; // prevent overlapping starts
+  if (isLoadingTrack) return;
   isLoadingTrack = true;
 
-  stopTrack(); // stop any existing track
+  stopTrack();
   currentIndex = index;
   highlightCurrentTrack();
 
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Gain for volume control
     gainNode = audioCtx.createGain();
     gainNode.gain.value = parseFloat(volumeSlider.value);
+
+    // Low-pass filter to smooth harsh high frequencies
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 8000;
+    filter.Q.value = 1;
+
+    filter.connect(gainNode);
     gainNode.connect(audioCtx.destination);
+
+    audioFilter = filter;
   }
 
   try {
@@ -215,7 +232,7 @@ progressContainer.addEventListener("click", (e) => {
   const clickPercent = clickX / rect.width;
 
   pauseOffset = trackDuration * clickPercent;
-  playTrack(currentIndex); // restart playback from new offset
+  playTrack(currentIndex);
 });
 
 // ==================== Controls ====================
