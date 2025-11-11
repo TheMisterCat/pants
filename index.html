@@ -6,7 +6,7 @@
 <style>
   body { font-family: sans-serif; background: #121212; color: #eee; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 0; }
   h1 { margin: 1em 0; }
-  #controls { display: flex; align-items: center; gap: 1em; margin-bottom: 1em; }
+  #controls { display: flex; align-items: center; gap: 1em; margin-bottom: 1em; flex-wrap: wrap; }
   button { padding: 0.5em 1em; }
   #volume, #filterFreq, #progress { width: 200px; }
   #playlist { margin-top: 1em; width: 80%; max-width: 600px; }
@@ -21,7 +21,7 @@
   <button id="playPause">Play</button>
   <button id="stop">Stop</button>
   <button id="next">Next</button>
-  <label>Volume:<input type="range" id="volume" min="0" max="1" step="0.01" value="0.5"></label>
+  <label>Volume:<input type="range" id="volume" min="0" max="1" step="0.01" value="0.3"></label>
   <label>Treble:<input type="range" id="filterFreq" min="500" max="8000" step="10" value="4000"></label>
 </div>
 <input type="range" id="progress" min="0" max="1" step="0.001" value="0">
@@ -30,27 +30,38 @@
 <script>
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 let masterGainNode = audioContext.createGain();
-masterGainNode.gain.value = 0.3; // reduced to avoid oversaturation
+masterGainNode.gain.value = 0.3; // Safe default volume
 masterGainNode.connect(audioContext.destination);
+
+let compressor = audioContext.createDynamicsCompressor();
+compressor.threshold.setValueAtTime(-18, audioContext.currentTime);
+compressor.knee.setValueAtTime(15, audioContext.currentTime);
+compressor.ratio.setValueAtTime(2, audioContext.currentTime);
+compressor.attack.setValueAtTime(0.05, audioContext.currentTime);
+compressor.release.setValueAtTime(0.3, audioContext.currentTime);
+compressor.connect(masterGainNode);
 
 let trackList = [
   "track1.dfpwm",
   "track2.dfpwm",
   "track3.dfpwm"
-]; // Replace with actual GitHub DFPWM file URLs
+]; // Replace with actual DFPWM URLs
+
 let trackBuffers = {};
 let currentSource = null;
 let currentTrackIndex = 0;
 let isPlaying = false;
+let lastClickTime = 0;
 
 const volumeSlider = document.getElementById("volume");
 const filterSlider = document.getElementById("filterFreq");
 const progressSlider = document.getElementById("progress");
 const playlistDiv = document.getElementById("playlist");
 
+// --- Playback functions ---
 function stopCurrentTrack() {
   if (currentSource) {
-    currentSource.stop();
+    try { currentSource.stop(); } catch(e) {}
     currentSource.disconnect();
     currentSource = null;
   }
@@ -69,21 +80,17 @@ async function loadTrack(idx) {
   const url = trackList[idx];
   const response = await fetch(url);
   const dfpwmData = new Uint8Array(await response.arrayBuffer());
-  // Decode using AUKit-inspired JS decoder
-  const wavBuffer = dfpwmDecodeToPCM(dfpwmData);
+  const wavBuffer = dfpwmDecodeToPCM(dfpwmData); // Replace with working browser decoder
   const audioBuffer = await audioContext.decodeAudioData(wavBuffer.buffer);
   trackBuffers[idx] = audioBuffer;
   return audioBuffer;
 }
 
-// Simple AUKit-inspired DFPWM decoder placeholder
-function dfpwmDecodeToPCM(dfpwm) {
-  // Implement or port AUKit decoding here
-  // For demo, just returning silent buffer
-  return new Float32Array(dfpwm.length * 4); 
-}
-
 function playTrack(idx) {
+  const now = Date.now();
+  if (now - lastClickTime < 200) return; // safety ignore 200ms
+  lastClickTime = now;
+
   stopCurrentTrack();
   currentTrackIndex = idx;
   highlightPlaying();
@@ -92,18 +99,19 @@ function playTrack(idx) {
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
 
-    // Two-stage smoothing filter
-    const filter1 = audioContext.createBiquadFilter();
-    filter1.type = "lowpass";
-    filter1.frequency.value = filterSlider.value;
+    // --- Audio filters ---
+    const lowpass = audioContext.createBiquadFilter();
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = filterSlider.value;
 
-    const filter2 = audioContext.createBiquadFilter();
-    filter2.type = "lowpass";
-    filter2.frequency.value = filterSlider.value;
+    const highShelf = audioContext.createBiquadFilter();
+    highShelf.type = "highshelf";
+    highShelf.frequency.value = 10000;
+    highShelf.gain.value = -4; // gentle high frequency cut
 
-    source.connect(filter1);
-    filter1.connect(filter2);
-    filter2.connect(masterGainNode);
+    source.connect(lowpass);
+    lowpass.connect(highShelf);
+    highShelf.connect(compressor);
 
     source.start(0);
     currentSource = source;
@@ -120,41 +128,40 @@ function playTrack(idx) {
 }
 
 function playPauseTrack() {
-  if (isPlaying) {
-    stopCurrentTrack();
-  } else {
-    playTrack(currentTrackIndex);
-  }
+  if (isPlaying) stopCurrentTrack();
+  else playTrack(currentTrackIndex);
 }
 
 function nextTrack() {
-  let nextIdx = (currentTrackIndex + 1) % trackList.length;
-  playTrack(nextIdx);
+  playTrack((currentTrackIndex + 1) % trackList.length);
 }
 
 function prevTrack() {
-  let prevIdx = (currentTrackIndex - 1 + trackList.length) % trackList.length;
-  playTrack(prevIdx);
+  playTrack((currentTrackIndex - 1 + trackList.length) % trackList.length);
 }
 
 function updatePlayButton() {
   document.getElementById("playPause").textContent = isPlaying ? "Pause" : "Play";
 }
 
+// --- UI events ---
 volumeSlider.addEventListener("input", () => {
   masterGainNode.gain.value = volumeSlider.value;
 });
 
 filterSlider.addEventListener("input", () => {
-  // filter frequency is updated dynamically per new track
+  // Applied dynamically on next track
 });
 
 document.getElementById("playPause").addEventListener("click", playPauseTrack);
-document.getElementById("stop").addEventListener("click", stopCurrentTrack);
+document.getElementById("stop").addEventListener("click", () => {
+  stopCurrentTrack();
+  currentTrackIndex = 0; // stops auto-play
+});
 document.getElementById("next").addEventListener("click", nextTrack);
 document.getElementById("prev").addEventListener("click", prevTrack);
 
-// Populate playlist
+// --- Populate playlist ---
 trackList.forEach((name, i) => {
   const div = document.createElement("div");
   div.textContent = name;
@@ -162,11 +169,21 @@ trackList.forEach((name, i) => {
   playlistDiv.appendChild(div);
 });
 
-// Optional: progress bar updates (basic, not linked to exact sample position)
+// --- Progress bar update ---
 setInterval(() => {
-  progressSlider.value = isPlaying ? (audioContext.currentTime % 10) / 10 : 0;
+  if (currentSource && isPlaying) {
+    progressSlider.value = Math.min(1, audioContext.currentTime / currentSource.buffer.duration);
+  } else {
+    progressSlider.value = 0;
+  }
 }, 200);
 
+// --- Placeholder decoder ---
+function dfpwmDecodeToPCM(dfpwm) {
+  // Keep your working browser decoder here
+  // Returns Float32Array or ArrayBuffer ready for decodeAudioData
+  return new Float32Array(dfpwm.length * 4);
+}
 </script>
 </body>
 </html>
