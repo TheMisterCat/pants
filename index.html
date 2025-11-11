@@ -2,105 +2,94 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>DFPWM Radio Test</title>
+<title>DFPWM Radio (On-the-fly)</title>
 <style>
-body { font-family: sans-serif; padding: 2rem; max-width: 500px; margin: auto; }
-button { padding: 0.5rem 1rem; font-size: 1rem; margin: 0.5rem 0; }
+body { font-family: sans-serif; padding: 2rem; }
 ul { list-style: none; padding: 0; }
-li { cursor: pointer; margin: 0.2rem 0; }
+li { cursor: pointer; margin: 0.3rem 0; }
 li.current { font-weight: bold; color: green; }
 </style>
 </head>
 <body>
-<h1>DFPWM Radio Test</h1>
+<h1>DFPWM Radio</h1>
 <p id="status">Loading playlist...</p>
-<button id="playBtn" disabled>Play First Track</button>
 <ul id="trackList"></ul>
 
 <script type="module">
-import { DfpwmDecoder } from "./js/dfpwm.min.js";
+import { DfpwmDecoder } from "./js/dfpwm.js";
 
 const USER = "TheMisterCat";
 const REPO = "pants";
 const BRANCH = "main";
 
 const STATUS = document.getElementById("status");
-const PLAY_BTN = document.getElementById("playBtn");
 const TRACK_LIST = document.getElementById("trackList");
 
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let gainNode = audioCtx.createGain();
-gainNode.connect(audioCtx.destination);
 gainNode.gain.value = 0.5;
+gainNode.connect(audioCtx.destination);
 
 let playlist = [];
-let currentIndex = 0;
 let currentSource = null;
 
 async function fetchPlaylist() {
-    try {
-        const res = await fetch(`https://api.github.com/repos/${USER}/${REPO}/contents?ref=${BRANCH}`);
-        const files = await res.json();
-        playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => ({ name: f.name, url: f.download_url }));
-        if(!playlist.length) { STATUS.textContent = "No DFPWM files found!"; return; }
-        STATUS.textContent = `Found ${playlist.length} tracks.`;
-        PLAY_BTN.disabled = false;
-        displayTrackList();
-    } catch(err) { STATUS.textContent = "Failed to load playlist: " + err; }
+  const res = await fetch(`https://api.github.com/repos/${USER}/${REPO}/contents?ref=${BRANCH}`);
+  const files = await res.json();
+  playlist = files.filter(f => f.name.endsWith(".dfpwm"));
+  if (!playlist.length) {
+    STATUS.textContent = "No DFPWM files found";
+    return;
+  }
+  STATUS.textContent = `Found ${playlist.length} tracks`;
+  displayTrackList();
 }
 
 function displayTrackList() {
-    TRACK_LIST.innerHTML = "";
-    playlist.forEach((track, i) => {
-        const li = document.createElement("li");
-        li.textContent = track.name;
-        li.dataset.index = i;
-        li.addEventListener("click", () => { playTrack(i); });
-        TRACK_LIST.appendChild(li);
-    });
+  TRACK_LIST.innerHTML = "";
+  playlist.forEach((file, i) => {
+    const li = document.createElement("li");
+    li.textContent = file.name;
+    li.dataset.index = i;
+    li.addEventListener("click", () => playTrack(i));
+    TRACK_LIST.appendChild(li);
+  });
 }
 
 function highlightTrack(index) {
-    TRACK_LIST.querySelectorAll("li").forEach(li => li.classList.remove("current"));
-    const li = TRACK_LIST.querySelector(`li[data-index="${index}"]`);
-    if(li) li.classList.add("current");
+  TRACK_LIST.querySelectorAll("li").forEach(li => li.classList.remove("current"));
+  const li = TRACK_LIST.querySelector(`li[data-index="${index}"]`);
+  if (li) li.classList.add("current");
 }
 
 async function fetchDfpwm(url) {
-    const res = await fetch(url);
-    const arrayBuffer = await res.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+  const res = await fetch(url);
+  const arrayBuffer = await res.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 }
 
 async function playTrack(index) {
-    if(currentSource) { currentSource.stop(); currentSource.disconnect(); }
-    currentIndex = index;
-    highlightTrack(currentIndex);
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  if (currentSource) { currentSource.stop(); currentSource.disconnect(); }
 
-    const bytes = await fetchDfpwm(playlist[currentIndex].url);
-    const decoder = new DfpwmDecoder();
-    const pcm = decoder.decode(bytes);
+  const track = playlist[index];
+  highlightTrack(index);
+  STATUS.textContent = `Loading: ${track.name}`;
 
-    const floatData = new Float32Array(pcm.length);
-    for(let i=0;i<pcm.length;i++) {
-        floatData[i] = Math.max(-1, Math.min(1, pcm[i]/128));
-    }
+  const dfpwmBytes = await fetchDfpwm(track.download_url);
+  const decoder = new DfpwmDecoder();
+  const floatSamples = decoder.decode(dfpwmBytes);
 
-    const buffer = audioCtx.createBuffer(1, floatData.length, 44100);
-    buffer.getChannelData(0).set(floatData);
+  const buffer = audioCtx.createBuffer(1, floatSamples.length, 44100);
+  buffer.getChannelData(0).set(floatSamples);
 
-    currentSource = audioCtx.createBufferSource();
-    currentSource.buffer = buffer;
-    currentSource.connect(gainNode);
-    currentSource.start();
+  currentSource = audioCtx.createBufferSource();
+  currentSource.buffer = buffer;
+  currentSource.connect(gainNode);
+  currentSource.start();
 
-    STATUS.textContent = `Playing: ${playlist[currentIndex].name}`;
+  STATUS.textContent = `Playing: ${track.name}`;
 }
-
-PLAY_BTN.addEventListener("click", async () => {
-    if(audioCtx.state === "suspended") await audioCtx.resume();
-    playTrack(0);
-});
 
 await fetchPlaylist();
 </script>
