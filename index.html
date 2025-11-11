@@ -7,7 +7,7 @@
   body { font-family: sans-serif; margin: 2em; }
   #controls button { margin: 0.2em; }
   #volume { width: 150px; }
-  #progressContainer { width: 300px; height: 10px; background: #ddd; margin-top: 0.5em; position: relative; }
+  #progressContainer { width: 300px; height: 10px; background: #ddd; margin-top: 0.5em; position: relative; cursor: pointer; }
   #progress { height: 100%; width: 0%; background: #3a9; }
   #trackList li { cursor: pointer; }
   #trackList li.current { font-weight: bold; }
@@ -68,7 +68,7 @@ let gainNode = null;
 let source = null;
 
 let isPlaying = false;
-let isLoadingTrack = false; // <— prevents multiple simultaneous loads
+let isLoadingTrack = false; // prevents multiple simultaneous loads
 let trackStartTime = 0;
 let pauseOffset = 0;
 let trackDuration = 0;
@@ -78,6 +78,7 @@ const trackListEl = document.getElementById("trackList");
 const playPauseBtn = document.getElementById("playPause");
 const volumeSlider = document.getElementById("volume");
 const progressBar = document.getElementById("progress");
+const progressContainer = document.getElementById("progressContainer");
 
 // ==================== Playlist ====================
 async function fetchPlaylist() {
@@ -116,7 +117,7 @@ function createSource(pcm) {
 
 // ==================== Playback ====================
 async function playTrack(index) {
-  if (isLoadingTrack) return; // <— ignore clicks while loading
+  if (isLoadingTrack) return; // prevent overlapping starts
   isLoadingTrack = true;
 
   stopTrack(); // stop any existing track
@@ -145,7 +146,7 @@ async function playTrack(index) {
     startProgressUpdater();
     playPauseBtn.textContent = "Pause";
   } finally {
-    isLoadingTrack = false; // release lock even if fetch fails
+    isLoadingTrack = false;
   }
 }
 
@@ -204,6 +205,18 @@ function stopProgressUpdater() {
   if (progressInterval) clearInterval(progressInterval);
   progressBar.style.width = "0%";
 }
+
+// Clickable progress bar
+progressContainer.addEventListener("click", (e) => {
+  if (!source) return;
+
+  const rect = progressContainer.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickPercent = clickX / rect.width;
+
+  pauseOffset = trackDuration * clickPercent;
+  playTrack(currentIndex); // restart playback from new offset
+});
 
 // ==================== Controls ====================
 playPauseBtn.addEventListener("click", () => {
