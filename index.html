@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>DFPWM Radio Player</title>
+<title>SMRT Radio</title>
 <style>
   body { font-family: sans-serif; margin: 2em; }
   #controls button { margin: 0.2em; }
@@ -68,6 +68,7 @@ let gainNode = null;
 let source = null;
 
 let isPlaying = false;
+let isLoadingTrack = false; // <— prevents multiple simultaneous loads
 let trackStartTime = 0;
 let pauseOffset = 0;
 let trackDuration = 0;
@@ -115,8 +116,10 @@ function createSource(pcm) {
 
 // ==================== Playback ====================
 async function playTrack(index) {
-  stopTrack(); // stop any existing track
+  if (isLoadingTrack) return; // <— ignore clicks while loading
+  isLoadingTrack = true;
 
+  stopTrack(); // stop any existing track
   currentIndex = index;
   highlightCurrentTrack();
 
@@ -127,19 +130,23 @@ async function playTrack(index) {
     gainNode.connect(audioCtx.destination);
   }
 
-  const pcm = await fetchTrackPCM(playlist[currentIndex]);
-  const { newSource, duration } = createSource(pcm);
+  try {
+    const pcm = await fetchTrackPCM(playlist[currentIndex]);
+    const { newSource, duration } = createSource(pcm);
 
-  source = newSource;
-  trackDuration = duration;
+    source = newSource;
+    trackDuration = duration;
 
-  source.start(0, pauseOffset);
-  trackStartTime = audioCtx.currentTime - pauseOffset;
-  pauseOffset = 0;
-  isPlaying = true;
+    source.start(0, pauseOffset);
+    trackStartTime = audioCtx.currentTime - pauseOffset;
+    pauseOffset = 0;
+    isPlaying = true;
 
-  startProgressUpdater();
-  playPauseBtn.textContent = "Pause";
+    startProgressUpdater();
+    playPauseBtn.textContent = "Pause";
+  } finally {
+    isLoadingTrack = false; // release lock even if fetch fails
+  }
 }
 
 function stopTrack() {
