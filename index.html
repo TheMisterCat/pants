@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>SMRT Radio</title>
 <style>
-  body { font-family: sans-serif; margin: 2em; background:#f5f5f5; color:#222; }
+  body { font-family: sans-serif; margin:2em; background:#f5f5f5; color:#222; }
   h1 { margin-bottom: 0.5em; }
   #controls button { margin: 0.2em; }
   #volume, #filterFreq { width: 150px; }
@@ -18,7 +18,7 @@
 <body>
 <h1>SMRT Radio</h1>
 
-<!-- Controls at top -->
+<!-- Controls -->
 <div id="controls">
   <button id="prev">Prev</button>
   <button id="playPause">Play</button>
@@ -33,26 +33,40 @@
   <div id="progress"></div>
 </div>
 
-<!-- Track list at bottom -->
+<!-- Track list -->
 <ul id="trackList"></ul>
 
 <script type="module">
-// ==================== DFPWM Decoder ====================
+// ==================== Improved DFPWM Decoder ====================
 export function decodeDFPWM(bytes) {
   let charge = 0;
-  const strength = 0.25; 
+  const strength = 0.25;
   const output = new Float32Array(bytes.length * 8);
   let sampleIndex = 0;
+
+  const MAX_GAIN = 0.15;  // Reduced gain to prevent oversaturation
   const fadeSamples = 32;
 
   for (let byte of bytes) {
     for (let i = 0; i < 8; i++) {
       const bit = (byte >> i) & 1;
       const target = bit ? 1 : -1;
+
+      // Smooth transition
       charge += (target - charge) * strength;
 
+      // Soft clipping / dynamic compression
+      let sample = charge * MAX_GAIN;
+      if (sample > 1) sample = 1;
+      else if (sample < -1) sample = -1;
+
+      // Optional fade-in for first few samples to prevent clicks
       const fadeFactor = sampleIndex < fadeSamples ? sampleIndex / fadeSamples : 1;
-      output[sampleIndex++] = Math.max(-1, Math.min(1, charge)) * 0.3 * fadeFactor;
+
+      // Optional smoothing (average with previous)
+      if (sampleIndex > 0) sample = 0.8 * sample + 0.2 * output[sampleIndex - 1];
+
+      output[sampleIndex++] = sample * fadeFactor;
     }
   }
   return output;
@@ -136,11 +150,9 @@ async function playTrack(index) {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    // Gain for volume
     gainNode = audioCtx.createGain();
     gainNode.gain.value = parseFloat(volumeSlider.value);
 
-    // Low-pass filter
     const filter = audioCtx.createBiquadFilter();
     filter.type = "lowpass";
     filter.frequency.value = parseFloat(filterFreqSlider.value);
@@ -148,7 +160,6 @@ async function playTrack(index) {
 
     filter.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-
     audioFilter = filter;
   }
 
