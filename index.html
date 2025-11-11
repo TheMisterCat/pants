@@ -4,203 +4,215 @@
 <meta charset="UTF-8">
 <title>SMRT Radio</title>
 <style>
-  body { font-family: sans-serif; background: #121212; color: #eee; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 0; }
-  h1 { margin: 1em 0; }
-  #controls { display: flex; align-items: center; gap: 1em; margin-bottom: 1em; flex-wrap: wrap; }
+  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; display: flex; flex-direction: column; align-items: center; }
+  header { text-align: center; margin: 1em; }
+  #controls { display: flex; gap: 10px; margin: 1em; align-items: center; flex-wrap: wrap; justify-content: center; }
   button { padding: 0.5em 1em; }
-  #volume, #filterFreq, #progress { width: 200px; }
-  #playlist { margin-top: 1em; width: 80%; max-width: 600px; }
-  #playlist div { padding: 0.5em; cursor: pointer; border-bottom: 1px solid #333; }
-  #playlist .playing { background: #333; }
+  #sliders { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #playlist { margin-top: 1em; width: 90%; max-width: 800px; overflow-y: auto; max-height: 300px; }
+  .track { padding: 0.5em; cursor: pointer; border-bottom: 1px solid #444; }
+  .track.playing { background: #333; }
+  #progress { width: 300px; margin-top: 1em; }
+  #waveform { width: 90%; max-width: 800px; height: 100px; background: #222; margin-top: 1em; }
 </style>
 </head>
 <body>
-<h1>SMRT Radio</h1>
+<header><h1>SMRT Radio</h1></header>
+
 <div id="controls">
   <button id="prev">Prev</button>
-  <button id="playPause">Play</button>
+  <button id="play">Play</button>
+  <button id="pause">Pause</button>
   <button id="stop">Stop</button>
   <button id="next">Next</button>
-  <label>Volume:<input type="range" id="volume" min="0" max="1" step="0.01" value="0.3"></label>
-  <label>Treble:<input type="range" id="filterFreq" min="500" max="8000" step="10" value="4000"></label>
+  <div id="sliders">
+    <label>Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2"></label>
+    <label>Low-pass: <input type="range" id="filter" min="500" max="20000" step="100" value="12000"></label>
+  </div>
 </div>
-<input type="range" id="progress" min="0" max="1" step="0.001" value="0">
+
+<progress id="progress" value="0" max="1"></progress>
+<canvas id="waveform"></canvas>
 <div id="playlist"></div>
 
 <script>
-const repoUser = "TheMisterCat";
-const repoName = "pants";
-let trackList = [];
-const playlistDiv = document.getElementById("playlist");
+// --- CONFIG ---
+const REPO = "TheMisterCat/pants";
+const AUDIO_DIR = ""; // files are in root
+const DFPWM_VOLUME_SCALING = 0.2; // up from 0.05 for audibility
 
+// --- GLOBALS ---
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-let masterGainNode = audioContext.createGain();
-masterGainNode.gain.value = 0.3; // initial safe volume
-masterGainNode.connect(audioContext.destination);
+const masterGainNode = audioContext.createGain();
+const filterNode = audioContext.createBiquadFilter();
+filterNode.type = "lowpass";
+filterNode.frequency.value = 12000;
 
-let compressor = audioContext.createDynamicsCompressor();
-compressor.threshold.setValueAtTime(-18, audioContext.currentTime);
-compressor.knee.setValueAtTime(15, audioContext.currentTime);
-compressor.ratio.setValueAtTime(2, audioContext.currentTime);
-compressor.attack.setValueAtTime(0.05, audioContext.currentTime);
-compressor.release.setValueAtTime(0.3, audioContext.currentTime);
-compressor.connect(masterGainNode);
+masterGainNode.connect(filterNode);
+filterNode.connect(audioContext.destination);
 
-let trackBuffers = {};
+const analyser = audioContext.createAnalyser();
+analyser.fftSize = 2048;
+filterNode.connect(analyser);
+
 let currentSource = null;
 let currentTrackIndex = 0;
-let isPlaying = false;
-let lastClickTime = 0;
+let trackBuffers = [];
+let playlist = [];
+let lastButtonTime = 0;
+const BUTTON_COOLDOWN = 250; // ms
 
-const volumeSlider = document.getElementById("volume");
-const filterSlider = document.getElementById("filterFreq");
-const progressSlider = document.getElementById("progress");
-
-// --- Fetch track list from GitHub ---
-async function fetchTrackList() {
-  const apiUrl = `https://api.github.com/repos/${repoUser}/${repoName}/contents/`;
-  const resp = await fetch(apiUrl);
-  const files = await resp.json();
-  trackList = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.download_url);
-  populatePlaylist();
+// --- DFPWM DECODER (preserves dynamics more) ---
+function decodeDFPWM(bytes) {
+  let charge = 0;
+  const strength = 0.25;
+  const output = new Float32Array(bytes.length * 8);
+  let sampleIndex = 0;
+  for (let byte of bytes) {
+    for (let i = 0; i < 8; i++) {
+      const bit = (byte >> i) & 1;
+      const target = bit ? 1 : -1;
+      charge += (target - charge) * strength;
+      // Simple lowpass smoothing to avoid harsh click
+      output[sampleIndex++] = charge * DFPWM_VOLUME_SCALING;
+    }
+  }
+  return output;
 }
 
-function populatePlaylist() {
-  playlistDiv.innerHTML = "";
-  trackList.forEach((url, i) => {
-    const name = url.split("/").pop();
+// --- FETCH PLAYLIST ---
+async function fetchPlaylist() {
+  const url = `https://api.github.com/repos/${REPO}/contents/${AUDIO_DIR}`;
+  const res = await fetch(url);
+  const files = await res.json();
+  playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
+  const listDiv = document.getElementById("playlist");
+  listDiv.innerHTML = "";
+  playlist.forEach((name, idx) => {
     const div = document.createElement("div");
     div.textContent = name;
-    div.addEventListener("click", () => playTrack(i));
-    playlistDiv.appendChild(div);
+    div.classList.add("track");
+    div.onclick = () => safePlay(idx);
+    listDiv.appendChild(div);
   });
 }
 
-// --- Playback functions ---
-function stopCurrentTrack() {
-  if (currentSource) {
-    try { currentSource.stop(); } catch(e) {}
-    currentSource.disconnect();
-    currentSource = null;
-  }
-  isPlaying = false;
-  updatePlayButton();
-}
-
-function highlightPlaying() {
-  Array.from(playlistDiv.children).forEach((el, i) => {
-    el.classList.toggle("playing", i === currentTrackIndex);
-  });
-}
-
+// --- LOAD TRACK ---
 async function loadTrack(idx) {
-  if (trackBuffers[idx]) return trackBuffers[idx];
-  const url = trackList[idx];
-  const response = await fetch(url);
-  const dfpwmData = new Uint8Array(await response.arrayBuffer());
-  const wavBuffer = dfpwmDecodeToPCM(dfpwmData); // Insert your working decoder
-  const audioBuffer = await audioContext.decodeAudioData(wavBuffer.buffer);
-  trackBuffers[idx] = audioBuffer;
-  return audioBuffer;
+  const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
+  const res = await fetch(url);
+  const arrayBuffer = await res.arrayBuffer();
+  const dfpwmBytes = new Uint8Array(arrayBuffer);
+  const floatData = decodeDFPWM(dfpwmBytes);
+  const buffer = audioContext.createBuffer(1, floatData.length, 48000);
+  buffer.copyToChannel(floatData, 0, 0);
+  trackBuffers[idx] = buffer;
 }
 
-function playTrack(idx) {
-  const now = Date.now();
-  if (now - lastClickTime < 200) return; // safety ignore
-  lastClickTime = now;
-
-  stopCurrentTrack();
+// --- PLAY LOGIC WITH SINGLE TRACK SAFETY ---
+async function playTrack(idx) {
+  if (currentSource) currentSource.stop();
   currentTrackIndex = idx;
   highlightPlaying();
+  if (!trackBuffers[idx]) await loadTrack(idx);
 
-  loadTrack(idx).then(buffer => {
-    const source = audioContext.createBufferSource();
-    source.buffer = buffer;
-
-    // --- Audio filters ---
-    const lowpass = audioContext.createBiquadFilter();
-    lowpass.type = "lowpass";
-    lowpass.frequency.value = filterSlider.value;
-
-    const highShelf = audioContext.createBiquadFilter();
-    highShelf.type = "highshelf";
-    highShelf.frequency.value = 10000;
-    highShelf.gain.value = -4;
-
-    const noiseFilter = audioContext.createBiquadFilter();
-    noiseFilter.type = "lowpass";
-    noiseFilter.frequency.value = 7000; // gentle smoothing of high frequencies
-
-    source.connect(lowpass);
-    lowpass.connect(highShelf);
-    highShelf.connect(noiseFilter);
-    noiseFilter.connect(compressor);
-
-    source.start(0);
-    currentSource = source;
-    isPlaying = true;
-    updatePlayButton();
-
-    source.onended = () => {
-      currentSource = null;
-      isPlaying = false;
-      updatePlayButton();
-      nextTrack();
-    };
-  });
+  const source = audioContext.createBufferSource();
+  source.buffer = trackBuffers[idx];
+  source.connect(masterGainNode);
+  source.start(0);
+  currentSource = source;
+  source.onended = () => {
+    currentSource = null;
+    nextTrack();
+  };
 }
 
-function playPauseTrack() {
-  if (isPlaying) stopCurrentTrack();
-  else playTrack(currentTrackIndex);
+// --- SAFE BUTTON HANDLER ---
+function safeAction(action) {
+  const now = performance.now();
+  if (now - lastButtonTime < BUTTON_COOLDOWN) return;
+  lastButtonTime = now;
+  action();
+}
+
+function safePlay(idx) { safeAction(() => playTrack(idx)); }
+function safePause() { safeAction(pauseTrack); }
+function safeStop() { safeAction(stopTrack); }
+function safeNext() { safeAction(nextTrack); }
+function safePrev() { safeAction(prevTrack); }
+
+// --- CONTROL FUNCTIONS ---
+function pauseTrack() {
+  if (currentSource) currentSource.stop();
+  currentSource = null;
+}
+
+function stopTrack() {
+  if (currentSource) currentSource.stop();
+  currentSource = null;
 }
 
 function nextTrack() {
-  playTrack((currentTrackIndex + 1) % trackList.length);
+  let next = (currentTrackIndex + 1) % playlist.length;
+  playTrack(next);
 }
 
 function prevTrack() {
-  playTrack((currentTrackIndex - 1 + trackList.length) % trackList.length);
+  let prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+  playTrack(prev);
 }
 
-function updatePlayButton() {
-  document.getElementById("playPause").textContent = isPlaying ? "Pause" : "Play";
+function highlightPlaying() {
+  document.querySelectorAll(".track").forEach((el, idx) => {
+    el.classList.toggle("playing", idx === currentTrackIndex);
+  });
 }
 
-// --- UI events ---
-volumeSlider.addEventListener("input", () => {
-  masterGainNode.gain.value = volumeSlider.value;
+// --- EVENT LISTENERS ---
+document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
+document.getElementById("pause").onclick = safePause;
+document.getElementById("stop").onclick = safeStop;
+document.getElementById("next").onclick = safeNext;
+document.getElementById("prev").onclick = safePrev;
+
+document.getElementById("volume").addEventListener("input", e => {
+  masterGainNode.gain.value = parseFloat(e.target.value);
+});
+document.getElementById("filter").addEventListener("input", e => {
+  filterNode.frequency.value = parseFloat(e.target.value);
 });
 
-filterSlider.addEventListener("input", () => {
-  // will apply on next track automatically
-});
-
-document.getElementById("playPause").addEventListener("click", playPauseTrack);
-document.getElementById("stop").addEventListener("click", () => {
-  stopCurrentTrack();
-  currentTrackIndex = 0;
-});
-document.getElementById("next").addEventListener("click", nextTrack);
-document.getElementById("prev").addEventListener("click", prevTrack);
-
-// --- Progress bar ---
-setInterval(() => {
-  if (currentSource && isPlaying) {
-    progressSlider.value = Math.min(1, audioContext.currentTime / currentSource.buffer.duration);
-  } else {
-    progressSlider.value = 0;
+// --- WAVEFORM VISUALIZATION ---
+const canvas = document.getElementById("waveform");
+const ctx = canvas.getContext("2d");
+function drawWaveform() {
+  requestAnimationFrame(drawWaveform);
+  const bufferLength = analyser.fftSize;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteTimeDomainData(dataArray);
+  
+  ctx.fillStyle = "#222";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#0f0";
+  ctx.beginPath();
+  const sliceWidth = canvas.width / bufferLength;
+  let x = 0;
+  for(let i = 0; i < bufferLength; i++) {
+    const v = dataArray[i] / 128.0;
+    const y = v * canvas.height / 2;
+    if(i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+    x += sliceWidth;
   }
-}, 200);
-
-// --- Placeholder decoder ---
-// Replace with your working DFPWM-to-PCM decoder
-function dfpwmDecodeToPCM(dfpwm) {
-  return new Float32Array(dfpwm.length * 4);
+  ctx.lineTo(canvas.width, canvas.height/2);
+  ctx.stroke();
 }
+drawWaveform();
 
-// --- Initialize ---
-fetchTrackList();
+// --- INIT ---
+fetchPlaylist();
 </script>
 </body>
 </html>
