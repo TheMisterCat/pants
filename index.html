@@ -62,10 +62,9 @@
     let currentIndex = 0;
     let isPlaying = false;
     let shuffleMode = false;
-    let sourceQueue = [];
+    let currentSource = null;
     let currentBuffer = null;
-    let currentTimeOffset = 0;
-    const CHUNK_SIZE = 44100 * 2; // 2 seconds per chunk
+    let trackStartTime = 0;
 
     VOLUME_CTRL.addEventListener("input", () => {
       gainNode.gain.value = parseFloat(VOLUME_CTRL.value);
@@ -130,62 +129,54 @@
       const track = playlist[currentIndex];
       highlightTrack(currentIndex);
       STATUS.textContent = `Playing: ${track.name}`;
+
       const bytes = await fetchDfpwm(track.url);
       const decoder = new DfpwmDecoder();
-      const audioData = decoder.decode(bytes);
+      let pcm = decoder.decode(bytes);
 
-      currentBuffer = audioData;
-      currentTimeOffset = 0;
+      // Normalize to [-1,1] for Web Audio
+      const floatData = new Float32Array(pcm.length);
+      for(let i = 0; i < pcm.length; i++) floatData[i] = pcm[i] / 128;
+
+      currentBuffer = audioCtx.createBuffer(1, floatData.length, 44100);
+      currentBuffer.getChannelData(0).set(floatData);
+
+      currentSource = audioCtx.createBufferSource();
+      currentSource.buffer = currentBuffer;
+      currentSource.connect(gainNode);
+      currentSource.onended = () => { trackEnded(); };
+
+      currentSource.start();
+      trackStartTime = audioCtx.currentTime;
       isPlaying = true;
       PLAY_BTN.textContent = "⏸ Pause";
 
-      playNextChunk();
-    }
-
-    function playNextChunk() {
-      if(!isPlaying || currentTimeOffset >= currentBuffer.length) {
-        // Track ended
-        isPlaying = false;
-        PLAY_BTN.textContent = "▶ Play";
-        PROGRESS_BAR.style.width = "0%";
-        TIME_DISPLAY.textContent = "00:00 / 00:00";
-        if(shuffleMode) currentIndex = Math.floor(Math.random() * playlist.length);
-        else currentIndex = (currentIndex + 1) % playlist.length;
-        startTrack();
-        return;
-      }
-
-      const chunkEnd = Math.min(currentTimeOffset + CHUNK_SIZE, currentBuffer.length);
-      const chunkData = currentBuffer.slice(currentTimeOffset, chunkEnd);
-
-      const bufferNode = audioCtx.createBuffer(1, chunkData.length, 44100);
-      bufferNode.getChannelData(0).set(chunkData);
-
-      const source = audioCtx.createBufferSource();
-      source.buffer = bufferNode;
-      source.connect(gainNode);
-
-      source.onended = () => { currentTimeOffset += CHUNK_SIZE; playNextChunk(); };
-
-      source.start();
-      sourceQueue.push(source);
-
-      // Update progress
-      const totalDuration = currentBuffer.length / 44100;
-      const elapsed = currentTimeOffset / 44100;
-      PROGRESS_BAR.style.width = Math.min((elapsed / totalDuration) * 100, 100) + "%";
-      TIME_DISPLAY.textContent = formatTime(elapsed) + " / " + formatTime(totalDuration);
-
-      requestAnimationFrame(() => {
-        if(isPlaying) playNextChunk(); // schedule next if needed
-      });
+      requestAnimationFrame(updateProgress);
     }
 
     function stopTrack() {
+      if(currentSource) { currentSource.stop(); currentSource.disconnect(); currentSource = null; }
       isPlaying = false;
       PLAY_BTN.textContent = "▶ Play";
-      sourceQueue.forEach(s => s.stop());
-      sourceQueue = [];
+    }
+
+    function trackEnded() {
+      isPlaying = false;
+      PLAY_BTN.textContent = "▶ Play";
+      if(shuffleMode) currentIndex = Math.floor(Math.random() * playlist.length);
+      else currentIndex = (currentIndex + 1) % playlist.length;
+      startTrack();
+    }
+
+    function updateProgress() {
+      if(!currentBuffer) return;
+      if(isPlaying) {
+        const elapsed = audioCtx.currentTime - trackStartTime;
+        const total = currentBuffer.duration;
+        PROGRESS_BAR.style.width = Math.min((elapsed/total)*100,100) + "%";
+        TIME_DISPLAY.textContent = formatTime(elapsed) + " / " + formatTime(total);
+        if(elapsed < total) requestAnimationFrame(updateProgress);
+      }
     }
 
     function formatTime(sec) {
