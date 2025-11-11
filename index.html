@@ -51,7 +51,7 @@ async function playTrack(index) {
   const pcm = decodeDFPWM(buffer);
 
   // Create AudioBuffer
-  const audioBuffer = audioCtx.createBuffer(1, pcm.length, 44100);
+  const audioBuffer = audioCtx.createBuffer(1, pcm.length, 48000);
   audioBuffer.getChannelData(0).set(pcm);
 
   source = audioCtx.createBufferSource();
@@ -74,4 +74,5 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
