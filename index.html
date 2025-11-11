@@ -26,7 +26,7 @@
   <button id="stop">Stop</button>
   <button id="next">Next</button>
   <div id="sliders">
-    <label>Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5"></label>
+    <label>Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2"></label>
     <label>Low-pass: <input type="range" id="filter" min="500" max="20000" step="100" value="12000"></label>
   </div>
 </div>
@@ -39,7 +39,7 @@
 // --- CONFIG ---
 const REPO = "TheMisterCat/pants";
 const AUDIO_DIR = ""; // files are in root
-const DFPWM_VOLUME_SCALING = 0.2;
+const DFPWM_VOLUME_SCALING = 0.2; // up from 0.05 for audibility
 
 // --- GLOBALS ---
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -59,8 +59,10 @@ let currentSource = null;
 let currentTrackIndex = 0;
 let trackBuffers = [];
 let playlist = [];
+let lastButtonTime = 0;
+const BUTTON_COOLDOWN = 250; // ms
 
-// --- DFPWM DECODER ---
+// --- DFPWM DECODER (preserves dynamics more) ---
 function decodeDFPWM(bytes) {
   let charge = 0;
   const strength = 0.25;
@@ -71,11 +73,8 @@ function decodeDFPWM(bytes) {
       const bit = (byte >> i) & 1;
       const target = bit ? 1 : -1;
       charge += (target - charge) * strength;
-      let smoothed = charge * 0.95 + (sampleIndex > 0 ? 0.05 * output[sampleIndex - 1] : 0);
-      const threshold = 0.9;
-      if (smoothed > threshold) smoothed = threshold + (smoothed - threshold) * 0.2;
-      if (smoothed < -threshold) smoothed = -threshold + (smoothed + threshold) * 0.2;
-      output[sampleIndex++] = smoothed * DFPWM_VOLUME_SCALING;
+      // Simple lowpass smoothing to avoid harsh click
+      output[sampleIndex++] = charge * DFPWM_VOLUME_SCALING;
     }
   }
   return output;
@@ -93,7 +92,7 @@ async function fetchPlaylist() {
     const div = document.createElement("div");
     div.textContent = name;
     div.classList.add("track");
-    div.onclick = () => playTrack(idx);
+    div.onclick = () => safePlay(idx);
     listDiv.appendChild(div);
   });
 }
@@ -110,7 +109,7 @@ async function loadTrack(idx) {
   trackBuffers[idx] = buffer;
 }
 
-// --- PLAY LOGIC ---
+// --- PLAY LOGIC WITH SINGLE TRACK SAFETY ---
 async function playTrack(idx) {
   if (currentSource) currentSource.stop();
   currentTrackIndex = idx;
@@ -127,6 +126,20 @@ async function playTrack(idx) {
     nextTrack();
   };
 }
+
+// --- SAFE BUTTON HANDLER ---
+function safeAction(action) {
+  const now = performance.now();
+  if (now - lastButtonTime < BUTTON_COOLDOWN) return;
+  lastButtonTime = now;
+  action();
+}
+
+function safePlay(idx) { safeAction(() => playTrack(idx)); }
+function safePause() { safeAction(pauseTrack); }
+function safeStop() { safeAction(stopTrack); }
+function safeNext() { safeAction(nextTrack); }
+function safePrev() { safeAction(prevTrack); }
 
 // --- CONTROL FUNCTIONS ---
 function pauseTrack() {
@@ -156,11 +169,11 @@ function highlightPlaying() {
 }
 
 // --- EVENT LISTENERS ---
-document.getElementById("play").onclick = () => playTrack(currentTrackIndex);
-document.getElementById("pause").onclick = pauseTrack;
-document.getElementById("stop").onclick = stopTrack;
-document.getElementById("next").onclick = nextTrack;
-document.getElementById("prev").onclick = prevTrack;
+document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
+document.getElementById("pause").onclick = safePause;
+document.getElementById("stop").onclick = safeStop;
+document.getElementById("next").onclick = safeNext;
+document.getElementById("prev").onclick = safePrev;
 
 document.getElementById("volume").addEventListener("input", e => {
   masterGainNode.gain.value = parseFloat(e.target.value);
@@ -203,4 +216,3 @@ fetchPlaylist();
 </script>
 </body>
 </html>
-
