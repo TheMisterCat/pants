@@ -1,20 +1,26 @@
 // dfpwm.js
 export function decodeDFPWM(bytes) {
-  // DFPWM state variables
-  let charge = 0;
-  let lastbit = 0;
-  const output = new Float32Array(bytes.length * 8); // 8 samples per byte
+  let charge = 0;        // AUKit: internal charge level
+  let lastbit = 0;       // previous bit
+  const output = new Float32Array(bytes.length * 8);
+
+  // AUKit constants
+  const strength = 0.25; // adjust to match AUKit smoothing
+  const clamp = (v) => Math.max(-1, Math.min(1, v));
 
   let sampleIndex = 0;
+
   for (let byte of bytes) {
     for (let i = 0; i < 8; i++) {
-      let bit = (byte >> i) & 1;
-      // AUKit decoding logic
-      let delta = bit ? 1 : -1;
-      charge += delta * (1 - 0.5); // strength from AUKit (~0.5)
-      if (charge > 1) charge = 1;
-      if (charge < -1) charge = -1;
-      output[sampleIndex++] = charge;
+      const bit = (byte >> i) & 1;
+      const target = bit ? 1 : -1;
+
+      // AUKit’s "charge += (target - charge) * strength" smoothing
+      charge += (target - charge) * strength;
+
+      // store in output
+      output[sampleIndex++] = clamp(charge);
+
       lastbit = bit;
     }
   }
