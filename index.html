@@ -13,9 +13,25 @@
     #progressBar { width: 0; height: 100%; background: green; }
     #status { margin-bottom: 0.5rem; }
     @media (max-width: 500px) { body { padding: 1rem; } ul { max-height: 150px; } }
+
+    /* Overlay styles */
+    #startOverlay {
+      position: fixed; top:0; left:0; width:100%; height:100%;
+      background: #222; color: #fff; display:flex; align-items:center;
+      justify-content:center; flex-direction: column; z-index: 9999;
+    }
+    #startOverlay button {
+      padding: 1rem 2rem; font-size: 1rem; cursor: pointer;
+    }
   </style>
 </head>
 <body>
+  <!-- Start overlay -->
+  <div id="startOverlay">
+    <h2>Click to start the DFPWM Radio</h2>
+    <button id="startBtn">Start</button>
+  </div>
+
   <h1>DFPWM Radio</h1>
   <p id="status">Loading playlist...</p>
   <ul id="trackList"></ul>
@@ -52,6 +68,9 @@
     const VOLUME_CTRL = document.getElementById("volumeControl");
     const PROGRESS_BAR = document.getElementById("progressBar");
     const TIME_DISPLAY = document.getElementById("timeDisplay");
+
+    const START_OVERLAY = document.getElementById("startOverlay");
+    const START_BTN = document.getElementById("startBtn");
 
     let playlist = [];
     let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -146,6 +165,10 @@
       currentSource.connect(gainNode);
       currentSource.onended = () => { trackEnded(); };
 
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+      }
+
       currentSource.start();
       trackStartTime = audioCtx.currentTime;
       isPlaying = true;
@@ -184,6 +207,16 @@
       const s = Math.floor(sec % 60).toString().padStart(2,"0");
       return `${m}:${s}`;
     }
+
+    // Unlock AudioContext on first user click and start playback
+    START_BTN.addEventListener("click", async () => {
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+      }
+      START_OVERLAY.style.display = "none";
+      STATUS.textContent = "Starting...";
+      startTrack();
+    });
 
     await fetchPlaylist();
   </script>
