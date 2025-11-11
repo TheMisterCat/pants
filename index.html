@@ -1,279 +1,244 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>DFPWM Web Radio Player</title>
+  <meta charset="UTF-8">
+  <title>DFPWM Radio</title>
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background: #111;
-      color: #eee;
-      text-align: center;
-      margin: 0;
-      padding: 2em;
-    }
-    h1 { color: #6cf; margin-bottom: 0.5em; }
-    #controls {
-      display: flex;
-      justify-content: center;
-      gap: 0.5em;
-      flex-wrap: wrap;
-      margin-bottom: 1em;
-    }
-    button, input[type=range] {
-      background: #222;
-      color: #eee;
-      border: 1px solid #444;
-      border-radius: 4px;
-      padding: 0.4em 0.8em;
-      cursor: pointer;
-      font-size: 16px;
-    }
-    button:hover { background: #333; }
+    body { font-family: sans-serif; padding: 2rem; max-width: 500px; margin: auto; }
+    ul { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; border: 1px solid #ccc; margin-bottom: 1rem; }
+    li { padding: 0.25rem 0.5rem; cursor: pointer; }
+    li.current { font-weight: bold; color: green; background: #f0f0f0; }
+    button, input { margin-top: 0.5rem; margin-right: 0.5rem; }
     #progressContainer {
-      width: 80%;
-      margin: 1em auto;
+      width: 100%;
       height: 10px;
-      background: #333;
+      background: #ccc;
       border-radius: 5px;
-      cursor: pointer;
+      overflow: hidden;
+      margin-top: 0.5rem;
     }
     #progressBar {
+      width: 0;
       height: 100%;
-      width: 0%;
-      background: #6cf;
-      border-radius: 5px;
+      background: green;
     }
-    #tracklist {
-      margin-top: 1.5em;
-      max-width: 600px;
-      margin-left: auto;
-      margin-right: auto;
-      text-align: left;
+    #status { margin-bottom: 0.5rem; }
+    @media (max-width: 500px) {
+      body { padding: 1rem; }
+      ul { max-height: 150px; }
     }
-    .track {
-      padding: 0.4em;
-      border-bottom: 1px solid #333;
-      cursor: pointer;
-    }
-    .track:hover { background: #222; }
-    .track.active { background: #6cf; color: #111; }
-    #trackTitle { margin-top: 0.8em; font-size: 1.1em; }
   </style>
 </head>
 <body>
-  <h1>🎧 DFPWM Web Radio Player</h1>
-  <div id="controls">
-    <button id="playBtn">▶ Play</button>
-    <button id="pauseBtn" disabled>⏸ Pause</button>
-    <button id="stopBtn" disabled>⏹ Stop</button>
+  <h1>DFPWM Radio</h1>
+  <p id="status">Loading playlist...</p>
+  <ul id="trackList"></ul>
+
+  <div>
+    <button id="prevBtn" disabled>⏮ Previous</button>
+    <button id="playBtn" disabled>▶ Play</button>
     <button id="nextBtn" disabled>⏭ Next</button>
-    <button id="shuffleBtn">🔀 Shuffle Off</button>
-    <label>
-      🔊
-      <input id="volumeSlider" type="range" min="0" max="1" step="0.01" value="1">
-    </label>
+    <button id="shuffleBtn" disabled>🔀 Shuffle Off</button>
   </div>
 
-  <div id="trackTitle">Loading playlist…</div>
+  <div>
+    Volume: <input type="range" id="volumeControl" min="0" max="1" step="0.01" value="0.5">
+    Speed: <input type="range" id="speedControl" min="0.5" max="2" step="0.05" value="1">
+  </div>
 
   <div id="progressContainer">
     <div id="progressBar"></div>
   </div>
-
-  <div id="tracklist"></div>
+  <div id="timeDisplay">00:00 / 00:00</div>
 
   <script type="module">
-    import { DfpwmDecoder } from "https://cdn.jsdelivr.net/npm/dfpwm/dist/dfpwm.min.js";
+    import { DfpwmDecoder } from "./js/dfpwm.min.js";
 
-    // === CONFIG FOR YOUR REPO ===
-    const GITHUB_OWNER = "TheMisterCat";
-    const GITHUB_REPO  = "pants";
-    const GITHUB_BRANCH = "main";
-    const DIRECTORY_PATH = ""; // root of repo
-    const SAMPLE_RATE = 48000;
+    const GITHUB_USER = "TheMisterCat";
+    const GITHUB_REPO = "pants";
+    const BRANCH = "main";
 
-    // === ELEMENTS ===
-    const playBtn = document.getElementById("playBtn");
-    const pauseBtn = document.getElementById("pauseBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const nextBtn = document.getElementById("nextBtn");
-    const shuffleBtn = document.getElementById("shuffleBtn");
-    const trackTitle = document.getElementById("trackTitle");
-    const tracklistElem = document.getElementById("tracklist");
-    const progressContainer = document.getElementById("progressContainer");
-    const progressBar = document.getElementById("progressBar");
-    const volumeSlider = document.getElementById("volumeSlider");
+    const STATUS = document.getElementById("status");
+    const PLAY_BTN = document.getElementById("playBtn");
+    const PREV_BTN = document.getElementById("prevBtn");
+    const NEXT_BTN = document.getElementById("nextBtn");
+    const SHUFFLE_BTN = document.getElementById("shuffleBtn");
+    const TRACK_LIST_EL = document.getElementById("trackList");
+    const VOLUME_CTRL = document.getElementById("volumeControl");
+    const SPEED_CTRL = document.getElementById("speedControl");
+    const PROGRESS_BAR = document.getElementById("progressBar");
+    const TIME_DISPLAY = document.getElementById("timeDisplay");
 
-    // === AUDIO STATE ===
     let playlist = [];
-    let currentIndex = 0;
-    let isPlaying = false;
-    let shuffle = false;
-    let audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     let gainNode = audioCtx.createGain();
     gainNode.connect(audioCtx.destination);
-    let currentSource = null;
-    let startTime = 0;
-    let bufferLength = 0;
+    gainNode.gain.value = parseFloat(VOLUME_CTRL.value);
 
-    // === SAFE PATH HELPERS ===
-    const cleanPath = (p) => p.replace(/^\/+|\/+$/g, "");
-    const githubAPI = (path) =>
-      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents${path ? `/${cleanPath(path)}` : ""}?ref=${GITHUB_BRANCH}`;
-    const githubRaw = (path) =>
-      `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}${path ? `/${cleanPath(path)}` : ""}`;
+    let currentIndex = 0;
+    let isPlaying = false;
+    let shuffleMode = false;
+    let sourceNode = null;
+    let currentBuffer = null;
 
-    async function loadPlaylist() {
-      const res = await fetch(githubAPI(DIRECTORY_PATH));
-      if (!res.ok) throw new Error("Failed to load GitHub directory");
-      const items = await res.json();
-      playlist = items
-        .filter(i => i.name.toLowerCase().endsWith(".dfpwm"))
-        .map(i => ({
-          name: i.name,
-          path: i.name,
-          url: githubRaw(i.name)
-        }));
-      if (playlist.length === 0) {
-        trackTitle.textContent = "No .dfpwm files found!";
+    VOLUME_CTRL.addEventListener("input", () => {
+      gainNode.gain.value = parseFloat(VOLUME_CTRL.value);
+    });
+
+    SPEED_CTRL.addEventListener("input", () => {
+      if(sourceNode) sourceNode.playbackRate.value = parseFloat(SPEED_CTRL.value);
+    });
+
+    SHUFFLE_BTN.addEventListener("click", () => {
+      shuffleMode = !shuffleMode;
+      SHUFFLE_BTN.textContent = shuffleMode ? "🔀 Shuffle On" : "🔀 Shuffle Off";
+    });
+
+    PREV_BTN.addEventListener("click", () => {
+      currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+      startTrack();
+    });
+
+    NEXT_BTN.addEventListener("click", () => {
+      currentIndex = (currentIndex + 1) % playlist.length;
+      startTrack();
+    });
+
+    PLAY_BTN.addEventListener("click", () => {
+      if(!isPlaying) {
+        startTrack();
       } else {
-        buildTrackList();
-        trackTitle.textContent = `Ready: ${playlist.length} tracks.`;
-        nextBtn.disabled = false;
+        stopTrack();
       }
-    }
+    });
 
-    function buildTrackList() {
-      tracklistElem.innerHTML = "";
+    document.addEventListener("keydown", (e) => {
+      if(e.code === "Space") {
+        e.preventDefault();
+        PLAY_BTN.click();
+      } else if(e.code === "ArrowRight") {
+        NEXT_BTN.click();
+      } else if(e.code === "ArrowLeft") {
+        PREV_BTN.click();
+      }
+    });
+
+    function displayTrackList() {
+      TRACK_LIST_EL.innerHTML = "";
       playlist.forEach((track, i) => {
-        const div = document.createElement("div");
-        div.className = "track";
-        div.textContent = track.name;
-        div.onclick = async () => {
-          if (currentSource) currentSource.stop();
+        const li = document.createElement("li");
+        li.textContent = track.name;
+        li.dataset.index = i;
+        li.addEventListener("click", () => {
           currentIndex = i;
-          await decodeAndPlay(currentIndex);
-        };
-        tracklistElem.appendChild(div);
+          startTrack();
+        });
+        TRACK_LIST_EL.appendChild(li);
       });
     }
 
-    function updateTrackHighlight() {
-      document.querySelectorAll(".track").forEach((el, i) => {
-        el.classList.toggle("active", i === currentIndex);
-      });
+    function highlightTrack(index) {
+      TRACK_LIST_EL.querySelectorAll("li").forEach(li => li.classList.remove("current"));
+      const currentLi = TRACK_LIST_EL.querySelector(`li[data-index="${index}"]`);
+      if(currentLi) currentLi.classList.add("current");
     }
 
-    async function decodeAndPlay(index) {
-      if (index < 0 || index >= playlist.length) return;
-      const track = playlist[index];
-      trackTitle.textContent = `Now playing: ${track.name}`;
-      updateTrackHighlight();
-      const res = await fetch(track.url);
-      const dfpwmData = new Uint8Array(await res.arrayBuffer());
+    async function fetchPlaylist() {
+      try {
+        const apiUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents?ref=${BRANCH}`;
+        const res = await fetch(apiUrl);
+        const files = await res.json();
+        playlist = files
+          .filter(f => f.name.endsWith(".dfpwm"))
+          .map(f => ({ name: f.name, url: f.download_url }));
+
+        if(playlist.length === 0) {
+          STATUS.textContent = "No DFPWM files found!";
+        } else {
+          STATUS.textContent = `Found ${playlist.length} tracks.`;
+          PLAY_BTN.disabled = false;
+          PREV_BTN.disabled = false;
+          NEXT_BTN.disabled = false;
+          SHUFFLE_BTN.disabled = false;
+          displayTrackList();
+        }
+      } catch(err) {
+        STATUS.textContent = "Failed to load playlist: " + err;
+      }
+    }
+
+    async function fetchDfpwm(url) {
+      const res = await fetch(url);
+      const arrayBuffer = await res.arrayBuffer();
+      return new Uint8Array(arrayBuffer);
+    }
+
+    async function startTrack() {
+      stopTrack();
+      const track = playlist[currentIndex];
+      highlightTrack(currentIndex);
+      STATUS.textContent = `Playing: ${track.name}`;
+
+      const bytes = await fetchDfpwm(track.url);
       const decoder = new DfpwmDecoder();
-      const decoded = decoder.decode(dfpwmData);
-      const float32 = new Float32Array(decoded.length);
-      for (let i = 0; i < decoded.length; i++) float32[i] = decoded[i] / 128;
-      const buffer = audioCtx.createBuffer(1, float32.length, SAMPLE_RATE);
-      buffer.copyToChannel(float32, 0);
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(gainNode);
-      source.onended = () => {
-        if (isPlaying) nextTrack();
-      };
-      currentSource = source;
-      startTime = audioCtx.currentTime;
-      bufferLength = buffer.duration;
-      source.start();
+      const audioData = decoder.decode(bytes);
+
+      currentBuffer = audioCtx.createBuffer(1, audioData.length, 44100);
+      currentBuffer.getChannelData(0).set(audioData);
+
+      sourceNode = audioCtx.createBufferSource();
+      sourceNode.buffer = currentBuffer;
+      sourceNode.playbackRate.value = parseFloat(SPEED_CTRL.value);
+      sourceNode.connect(gainNode);
+
+      const startTime = audioCtx.currentTime;
       isPlaying = true;
-      playBtn.disabled = true;
-      pauseBtn.disabled = false;
-      stopBtn.disabled = false;
-    }
+      PLAY_BTN.textContent = "⏸ Pause";
 
-    function nextTrack() {
-      if (shuffle) {
-        currentIndex = Math.floor(Math.random() * playlist.length);
-      } else {
-        currentIndex = (currentIndex + 1) % playlist.length;
+      function updateProgress() {
+        if(!isPlaying || !currentBuffer) return;
+        const elapsed = audioCtx.currentTime - startTime;
+        const duration = currentBuffer.duration;
+        PROGRESS_BAR.style.width = Math.min((elapsed / duration) * 100, 100) + "%";
+        TIME_DISPLAY.textContent = formatTime(elapsed) + " / " + formatTime(duration);
+        if(elapsed < duration) requestAnimationFrame(updateProgress);
       }
-      decodeAndPlay(currentIndex);
-    }
+      updateProgress();
 
-    // === BUTTON EVENTS ===
-    playBtn.onclick = async () => {
-      if (!isPlaying) {
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-        await decodeAndPlay(currentIndex);
-      }
-    };
-
-    pauseBtn.onclick = () => {
-      if (isPlaying && audioCtx.state === "running") {
-        audioCtx.suspend();
+      sourceNode.onended = () => {
         isPlaying = false;
-        playBtn.disabled = false;
-        pauseBtn.disabled = true;
-      }
-    };
+        PLAY_BTN.textContent = "▶ Play";
+        PROGRESS_BAR.style.width = "0%";
+        TIME_DISPLAY.textContent = "00:00 / 00:00";
+        // Next track
+        if(shuffleMode) {
+          currentIndex = Math.floor(Math.random() * playlist.length);
+        } else {
+          currentIndex = (currentIndex + 1) % playlist.length;
+        }
+        startTrack();
+      };
 
-    stopBtn.onclick = () => {
-      if (currentSource) {
-        currentSource.stop();
-        currentSource = null;
+      sourceNode.start();
+    }
+
+    function stopTrack() {
+      if(sourceNode) {
+        sourceNode.stop();
+        sourceNode.disconnect();
+        sourceNode = null;
       }
       isPlaying = false;
-      playBtn.disabled = false;
-      pauseBtn.disabled = true;
-      stopBtn.disabled = true;
-      progressBar.style.width = "0%";
-    };
-
-    nextBtn.onclick = () => {
-      if (currentSource) currentSource.stop();
-      nextTrack();
-    };
-
-    shuffleBtn.onclick = () => {
-      shuffle = !shuffle;
-      shuffleBtn.textContent = shuffle ? "🔀 Shuffle On" : "🔀 Shuffle Off";
-    };
-
-    volumeSlider.oninput = () => {
-      gainNode.gain.value = parseFloat(volumeSlider.value);
-    };
-
-    // === PROGRESS BAR ===
-    progressContainer.addEventListener("click", (e) => {
-      if (!currentSource || !bufferLength) return;
-      const rect = progressContainer.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const fraction = x / rect.width;
-      const time = fraction * bufferLength;
-      currentSource.stop();
-      decodeAndPlay(currentIndex).then(() => {
-        startTime = audioCtx.currentTime - time;
-      });
-    });
-
-    function updateProgress() {
-      if (isPlaying && bufferLength > 0) {
-        const elapsed = audioCtx.currentTime - startTime;
-        const pct = Math.min(100, (elapsed / bufferLength) * 100);
-        progressBar.style.width = pct + "%";
-      }
-      requestAnimationFrame(updateProgress);
+      PLAY_BTN.textContent = "▶ Play";
     }
 
-    updateProgress();
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60).toString().padStart(2, "0");
+      const s = Math.floor(sec % 60).toString().padStart(2, "0");
+      return `${m}:${s}`;
+    }
 
-    // === INIT ===
-    loadPlaylist().catch(err => {
-      trackTitle.textContent = "Error loading playlist: " + err.message;
-    });
+    await fetchPlaylist();
   </script>
 </body>
 </html>
