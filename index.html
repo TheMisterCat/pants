@@ -5,10 +5,10 @@
 <title>SMRT Radio</title>
 <style>
   body { font-family: sans-serif; margin: 20px; background:#111; color:#eee; }
-  h1 { text-align:center; }
-  #controls { display:flex; justify-content:center; gap:10px; margin-bottom:10px; }
-  #progress { width: 80%; margin: 0 auto; display:block; }
-  #volume { width: 150px; }
+  h1 { text-align:center; margin-bottom:10px; }
+  #controls { display:flex; justify-content:center; gap:10px; flex-wrap: wrap; margin-bottom:10px; }
+  #progress { width: 80%; margin: 0 auto 10px; display:block; }
+  input[type=range] { vertical-align: middle; }
   #playlist { margin-top:20px; max-height:300px; overflow-y:auto; border-top:1px solid #444; padding-top:10px;}
   .track { cursor:pointer; padding:5px; }
   .track.active { background:#444; }
@@ -23,7 +23,8 @@
   <button id="pause">⏸ Pause</button>
   <button id="stop">⏹ Stop</button>
   <button id="next">⏭ Next</button>
-  Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5">
+  Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.3">
+  Treble: <input type="range" id="treble" min="2000" max="20000" step="100" value="12000">
 </div>
 <input type="range" id="progress" value="0" min="0" max="100">
 
@@ -38,15 +39,20 @@ const AUDIO_DIR = ""; // root
 // --- GLOBALS ---
 let audioContext = new (window.AudioContext || window.webkitAudioContext)();
 let gainNode = audioContext.createGain();
-gainNode.connect(audioContext.destination);
-gainNode.gain.value = 0.5;
+let filterNode = audioContext.createBiquadFilter();
+filterNode.type = "lowpass";
+filterNode.frequency.value = 12000; // default treble
+
+gainNode.connect(filterNode);
+filterNode.connect(audioContext.destination);
 
 let currentBufferSource = null;
 let currentTrackIndex = 0;
 let playlist = [];
 let isPlaying = false;
+let trackStartTime = 0;
 
-// --- DFPWM Decoder (full dynamic range) ---
+// --- DFPWM Decoder with soft smoothing and soft limiting ---
 function decodeDFPWM(bytes) {
   let charge = 0;
   const strength = 0.25;
@@ -59,8 +65,15 @@ function decodeDFPWM(bytes) {
       const target = bit ? 1 : -1;
       charge += (target - charge) * strength;
 
-      // Slight fade-in first sample to avoid clicks
-      output[sampleIndex++] = charge * 0.95 + (sampleIndex < 5 ? sampleIndex * 0.01 : 0);
+      // Soft smoothing
+      let smoothed = charge * 0.95 + (sampleIndex > 0 ? 0.05 * output[sampleIndex - 1] : 0);
+
+      // Soft limiter
+      const threshold = 0.9;
+      if (smoothed > threshold) smoothed = threshold + (smoothed - threshold) * 0.2;
+      if (smoothed < -threshold) smoothed = -threshold + (smoothed + threshold) * 0.2;
+
+      output[sampleIndex++] = smoothed;
     }
   }
   return output;
@@ -110,9 +123,12 @@ async function playTrack(index) {
   source.buffer = buffer;
   source.connect(gainNode);
   source.start(0);
+  trackStartTime = audioContext.currentTime;
   source.onended = () => { nextTrack(); };
   currentBufferSource = source;
   isPlaying = true;
+
+  updateProgress();
 }
 
 function stopTrack() {
@@ -125,6 +141,7 @@ function stopTrack() {
 }
 
 function pauseTrack() {
+  if (!audioContext) return;
   if (audioContext.state === "running") audioContext.suspend();
   else audioContext.resume();
 }
@@ -144,9 +161,12 @@ function updateActiveTrack() {
   });
 }
 
-// --- Volume Control ---
+// --- Volume and Treble Control ---
 document.getElementById("volume").addEventListener("input", e=>{
   gainNode.gain.value = parseFloat(e.target.value);
+});
+document.getElementById("treble").addEventListener("input", e=>{
+  filterNode.frequency.value = parseFloat(e.target.value);
 });
 
 // --- Control Buttons ---
@@ -155,6 +175,16 @@ document.getElementById("stop").onclick = stopTrack;
 document.getElementById("pause").onclick = pauseTrack;
 document.getElementById("next").onclick = nextTrack;
 document.getElementById("prev").onclick = prevTrack;
+
+// --- Progress bar ---
+const progressEl = document.getElementById("progress");
+function updateProgress() {
+  if (!currentBufferSource || !isPlaying) return;
+  const bufferLength = currentBufferSource.buffer.length / currentBufferSource.buffer.sampleRate;
+  const elapsed = audioContext.currentTime - trackStartTime;
+  progressEl.value = Math.min(100, (elapsed / bufferLength) * 100);
+  requestAnimationFrame(updateProgress);
+}
 
 // --- Initialize ---
 loadPlaylist();
