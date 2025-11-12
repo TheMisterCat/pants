@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>SMRT Radio</title>
-<link rel="icon" href="data:,"><!-- prevent favicon 404 -->
 <style>
   body { font-family: sans-serif; background: #111; color: #eee; margin: 0; display: flex; flex-direction: column; align-items: center; }
   header { text-align: center; margin: 1em; }
@@ -37,12 +36,15 @@
 <div id="playlist"></div>
 
 <script type="module">
-// ✅ Correct import: esm.sh/dfpwm exports { DFPWMDecoder }
-import { DFPWMDecoder } from "https://esm.sh/dfpwm";
+// --- IMPORT DFPWM MODULE ---
+import dfpwm from "https://esm.sh/dfpwm";
 
+// --- CONFIG ---
 const REPO = "TheMisterCat/pants";
-const AUDIO_DIR = "";
+const AUDIO_DIR = ""; // files are in root
+const DFPWM_VOLUME_SCALING = 0.2; // up from 0.05 for audibility
 
+// --- GLOBALS ---
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGainNode = audioContext.createGain();
 const filterNode = audioContext.createBiquadFilter();
@@ -61,9 +63,9 @@ let currentTrackIndex = 0;
 let trackBuffers = [];
 let playlist = [];
 let lastButtonTime = 0;
-const BUTTON_COOLDOWN = 250;
+const BUTTON_COOLDOWN = 250; // ms
 
-// --- FETCH PLAYLIST FROM GITHUB ---
+// --- FETCH PLAYLIST ---
 async function fetchPlaylist() {
   const url = `https://api.github.com/repos/${REPO}/contents/${AUDIO_DIR}`;
   const res = await fetch(url);
@@ -80,31 +82,28 @@ async function fetchPlaylist() {
   });
 }
 
-// --- LOAD AND DECODE TRACK USING DFPWMDecoder ---
+// --- LOAD TRACK WITH OFFICIAL DFPWM DECODER ---
 async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
   const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
 
-  // ✅ Create a decoder instance
-  const decoder = new DFPWMDecoder();
-
-  // Decode the full file into PCM8 samples
+  // decode using dfpwm module
+  const decoder = new dfpwm.Decoder();
   const pcm8 = decoder.decode(dfpwmBytes);
 
-  // Convert Int8 → Float32 for WebAudio
+  // convert Int8 PCM to Float32 normalized audio
   const floatData = new Float32Array(pcm8.length);
   for (let i = 0; i < pcm8.length; i++) {
-    floatData[i] = pcm8[i] / 128;
+    floatData[i] = pcm8[i] / 128 * DFPWM_VOLUME_SCALING;
   }
 
-  // Create and store WebAudio buffer
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
   trackBuffers[idx] = buffer;
 }
 
-// --- PLAYBACK LOGIC ---
+// --- PLAY LOGIC WITH SINGLE TRACK SAFETY ---
 async function playTrack(idx) {
   if (currentSource) currentSource.stop();
   currentTrackIndex = idx;
@@ -122,13 +121,14 @@ async function playTrack(idx) {
   };
 }
 
-// --- BUTTON SAFETY ---
+// --- SAFE BUTTON HANDLER ---
 function safeAction(action) {
   const now = performance.now();
   if (now - lastButtonTime < BUTTON_COOLDOWN) return;
   lastButtonTime = now;
   action();
 }
+
 function safePlay(idx) { safeAction(() => playTrack(idx)); }
 function safePause() { safeAction(pauseTrack); }
 function safeStop() { safeAction(stopTrack); }
@@ -140,18 +140,22 @@ function pauseTrack() {
   if (currentSource) currentSource.stop();
   currentSource = null;
 }
+
 function stopTrack() {
   if (currentSource) currentSource.stop();
   currentSource = null;
 }
+
 function nextTrack() {
   let next = (currentTrackIndex + 1) % playlist.length;
   playTrack(next);
 }
+
 function prevTrack() {
   let prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
   playTrack(prev);
 }
+
 function highlightPlaying() {
   document.querySelectorAll(".track").forEach((el, idx) => {
     el.classList.toggle("playing", idx === currentTrackIndex);
@@ -180,23 +184,23 @@ function drawWaveform() {
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
-
+  
   ctx.fillStyle = "#222";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+  
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#0f0";
   ctx.beginPath();
   const sliceWidth = canvas.width / bufferLength;
   let x = 0;
-  for (let i = 0; i < bufferLength; i++) {
+  for(let i = 0; i < bufferLength; i++) {
     const v = dataArray[i] / 128.0;
     const y = v * canvas.height / 2;
-    if (i === 0) ctx.moveTo(x, y);
+    if(i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
     x += sliceWidth;
   }
-  ctx.lineTo(canvas.width, canvas.height / 2);
+  ctx.lineTo(canvas.width, canvas.height/2);
   ctx.stroke();
 }
 drawWaveform();
