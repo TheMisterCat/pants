@@ -84,9 +84,6 @@
     <label>🔊 Volume:
       <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2">
     </label>
-    <label>🎚️ Low-pass:
-      <input type="range" id="filter" min="500" max="20000" step="100" value="12000">
-    </label>
   </div>
 </div>
 
@@ -105,7 +102,7 @@ const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGainNode = audioContext.createGain();
 const filterNode = audioContext.createBiquadFilter();
 filterNode.type = "lowpass";
-filterNode.frequency.value = 12000;
+filterNode.frequency.value = 9800;
 masterGainNode.connect(filterNode);
 filterNode.connect(audioContext.destination);
 
@@ -289,18 +286,13 @@ document.getElementById("prev").onclick = safePrev;
 
 // --- SLIDERS ---
 const volumeSlider = document.getElementById("volume");
-const filterSlider = document.getElementById("filter");
 
 volumeSlider.addEventListener("input", e => {
   masterGainNode.gain.value = parseFloat(e.target.value);
 });
-filterSlider.addEventListener("input", e => {
-  filterNode.frequency.value = parseFloat(e.target.value);
-});
 
 // Apply initial slider values immediately
 masterGainNode.gain.value = parseFloat(volumeSlider.value);
-filterNode.frequency.value = parseFloat(filterSlider.value);
 
 // --- VISUALIZER ---
 const canvas = document.getElementById("waveform");
