@@ -141,25 +141,7 @@ async function loadTrack(idx) {
   const arrayBuffer = await res.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  const rawPCM = decoder.decode(bytes); // Int8Array output
-
-  const floatData = new Float32Array(rawPCM.length);
-  let prevSample = 0;
-  for (let i = 0; i < rawPCM.length; i++) {
-    let sample = (rawPCM[i] / 128) * VOLUME_SCALING;
-
-    // --- Gentle smoothing: 90% current, 10% previous ---
-    sample = 0.9 * sample + 0.1 * prevSample;
-
-    // --- Tiny noise gate: only affects very small values ---
-    if (Math.abs(sample) < 0.002) sample = 0;
-
-    // --- Ultra-subtle dithering ---
-    sample += (Math.random() - 0.5) * 0.0002;
-
-    floatData[i] = sample;
-    prevSample = sample;
-  }
+  const floatData = decoder.decode(bytes);
 
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
@@ -266,5 +248,6 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
