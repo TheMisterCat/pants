@@ -63,57 +63,47 @@ let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
 
-// --- HIGH‑QUALITY DFPWM DECODER IMPLEMENTATION ---
+// --- HIGH-QUALITY DFPWM DECODER ---
 class DFPWMDecoderSpec {
   constructor() {
-    this.q = 0;        // “charge” state
-    this.s = 1;        // “strength” state
-    this.bPrev = 0;    // previous bit
-    // constants for 8‑bit sample mode
-    this.Ri = 7;
-    this.Rd = 20;
+    this.q = 0;       // charge
+    this.s = 127;     // strength (0–255)
+    this.bPrev = 0;   // previous bit
   }
 
   decode(bytes) {
     const out = new Float32Array(bytes.length * 8);
     let outIdx = 0;
 
-    for (let byteIdx = 0; byteIdx < bytes.length; byteIdx++) {
-      const byte = bytes[byteIdx];
-      for (let bitIdx = 0; bitIdx < 8; bitIdx++) {
-        const b = (byte >> bitIdx) & 1;
-        const t = b ? 127 : -128;
+    for (let i = 0; i < bytes.length; i++) {
+      const byte = bytes[i];
+      for (let bit = 0; bit < 8; bit++) {
+        const b = (byte >> bit) & 1;
+        const target = b ? 127 : -128;
 
-        // charge update
-        let qPrime = this.q + ((this.s * (t - this.q) + 128) >> 8);
-        if (qPrime === this.q && this.q !== t) {
-          if (t < this.q) qPrime--;
-          else if (t > this.q) qPrime++;
-        }
-        this.q = qPrime;
+        // smooth charge towards target
+        this.q += ((target - this.q) * this.s + 128) >> 8;
 
-        // strength update
-        let r, z;
+        // update strength
         if (b === this.bPrev) {
-          r = this.Ri;
-          z = 255;
+          this.s += ((255 - this.s) * 7 + 128) >> 8;   // ramp up
         } else {
-          r = this.Rd;
-          z = 0;
+          this.s += ((0 - this.s) * 20 + 128) >> 8;    // ramp down
         }
-        let sPrime = this.s + ((r * (z - this.s) + 128) >> 8);
-        if (sPrime === this.s && this.s !== z) {
-          if (z < this.s) sPrime--;
-          else if (z > this.s) sPrime++;
-        }
-        this.s = sPrime;
+
+        // clamp strength
+        if (this.s < 0) this.s = 0;
+        else if (this.s > 255) this.s = 255;
 
         this.bPrev = b;
 
-        // output sample normalization to Float32
-        out[outIdx++] = (this.q / 128) * VOLUME_SCALING;
+        // subtle dither: tiny random offset to smooth quantization
+        const dither = (Math.random() - 0.5) * (1 / 128);
+
+        out[outIdx++] = ((this.q / 128) + dither) * VOLUME_SCALING;
       }
     }
+
     return out;
   }
 }
@@ -204,6 +194,20 @@ function highlightPlaying() {
   });
 }
 
+// --- UI Event Listeners ---
+document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
+document.getElementById("pause").onclick = safePause;
+document.getElementById("stop").onclick = safeStop;
+document.getElementById("next").onclick = safeNext;
+document.getElementById("prev").onclick = safePrev;
+
+document.getElementById("volume").addEventListener("input", e => {
+  masterGainNode.gain.value = parseFloat(e.target.value);
+});
+document.getElementById("filter").addEventListener("input", e => {
+  filterNode.frequency.value = parseFloat(e.target.value);
+});
+
 // --- WAVEFORM VISUALIZATION ---
 const canvas = document.getElementById("waveform");
 const ctx = canvas.getContext("2d");
@@ -233,23 +237,8 @@ function drawWaveform() {
 }
 drawWaveform();
 
-// --- INIT & UI LISTENERS (DOM READY) ---
-document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
-  document.getElementById("pause").onclick = safePause;
-  document.getElementById("stop").onclick = safeStop;
-  document.getElementById("next").onclick = safeNext;
-  document.getElementById("prev").onclick = safePrev;
-
-  document.getElementById("volume").addEventListener("input", e => {
-    masterGainNode.gain.value = parseFloat(e.target.value);
-  });
-  document.getElementById("filter").addEventListener("input", e => {
-    filterNode.frequency.value = parseFloat(e.target.value);
-  });
-
-  fetchPlaylist();
-});
+// --- INIT ---
+fetchPlaylist();
 </script>
 </body>
 </html>
