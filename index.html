@@ -35,14 +35,12 @@
 <canvas id="waveform"></canvas>
 <div id="playlist"></div>
 
-<script type="module">
-// --- IMPORT DFPWM MODULE ---
-import dfpwm from "https://esm.sh/dfpwm";
-
+<script>
 // --- CONFIG ---
 const REPO = "TheMisterCat/pants";
-const AUDIO_DIR = ""; // files are in root
-const DFPWM_VOLUME_SCALING = 0.2; // up from 0.05 for audibility
+const AUDIO_DIR = "";
+const DFPWM_VOLUME_SCALING = 0.2;
+const CHUNK_SIZE = 65536; // decode in chunks for smooth streaming
 
 // --- GLOBALS ---
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -63,7 +61,33 @@ let currentTrackIndex = 0;
 let trackBuffers = [];
 let playlist = [];
 let lastButtonTime = 0;
-const BUTTON_COOLDOWN = 250; // ms
+const BUTTON_COOLDOWN = 250;
+
+// --- CHUNKED DFPWM DECODER ---
+class StreamingDFPWMDecoder {
+  constructor() {
+    this.charge = 0;
+    this.strength = 0.25;
+  }
+
+  decodeChunk(bytes) {
+    const out = new Float32Array(bytes.length * 8);
+    let idx = 0;
+    for (const byte of bytes) {
+      for (let i = 0; i < 8; i++) {
+        const bit = (byte >> i) & 1;
+        const target = bit ? 1 : -1;
+        this.charge += (target - this.charge) * this.strength;
+        // Optional micro low-pass
+        this.charge = this.charge * 0.999 + 0.001 * target;
+        out[idx++] = this.charge * DFPWM_VOLUME_SCALING;
+      }
+    }
+    return out;
+  }
+}
+
+const streamingDecoder = new StreamingDFPWMDecoder();
 
 // --- FETCH PLAYLIST ---
 async function fetchPlaylist() {
@@ -71,6 +95,7 @@ async function fetchPlaylist() {
   const res = await fetch(url);
   const files = await res.json();
   playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
+
   const listDiv = document.getElementById("playlist");
   listDiv.innerHTML = "";
   playlist.forEach((name, idx) => {
@@ -82,20 +107,27 @@ async function fetchPlaylist() {
   });
 }
 
-// --- LOAD TRACK WITH OFFICIAL DFPWM DECODER ---
+// --- LOAD TRACK STREAMING ---
 async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
-  const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
+  const arrayBuffer = await res.arrayBuffer();
+  const dfpwmBytes = new Uint8Array(arrayBuffer);
 
-  // decode using dfpwm module
-  const decoder = new dfpwm.Decoder();
-  const pcm8 = decoder.decode(dfpwmBytes);
+  // Split into chunks for progressive decoding
+  let chunks = [];
+  for (let i = 0; i < dfpwmBytes.length; i += CHUNK_SIZE) {
+    const slice = dfpwmBytes.slice(i, i + CHUNK_SIZE);
+    chunks.push(streamingDecoder.decodeChunk(slice));
+  }
 
-  // convert Int8 PCM to Float32 normalized audio
-  const floatData = new Float32Array(pcm8.length);
-  for (let i = 0; i < pcm8.length; i++) {
-    floatData[i] = pcm8[i] / 128 * DFPWM_VOLUME_SCALING;
+  // Concatenate all chunks into one Float32Array
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const floatData = new Float32Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    floatData.set(c, offset);
+    offset += c.length;
   }
 
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
@@ -103,7 +135,7 @@ async function loadTrack(idx) {
   trackBuffers[idx] = buffer;
 }
 
-// --- PLAY LOGIC WITH SINGLE TRACK SAFETY ---
+// --- PLAY LOGIC ---
 async function playTrack(idx) {
   if (currentSource) currentSource.stop();
   currentTrackIndex = idx;
@@ -136,25 +168,10 @@ function safeNext() { safeAction(nextTrack); }
 function safePrev() { safeAction(prevTrack); }
 
 // --- CONTROL FUNCTIONS ---
-function pauseTrack() {
-  if (currentSource) currentSource.stop();
-  currentSource = null;
-}
-
-function stopTrack() {
-  if (currentSource) currentSource.stop();
-  currentSource = null;
-}
-
-function nextTrack() {
-  let next = (currentTrackIndex + 1) % playlist.length;
-  playTrack(next);
-}
-
-function prevTrack() {
-  let prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-  playTrack(prev);
-}
+function pauseTrack() { if (currentSource) currentSource.stop(); currentSource = null; }
+function stopTrack() { if (currentSource) currentSource.stop(); currentSource = null; }
+function nextTrack() { let next = (currentTrackIndex + 1) % playlist.length; playTrack(next); }
+function prevTrack() { let prev = (currentTrackIndex - 1 + playlist.length) % playlist.length; playTrack(prev); }
 
 function highlightPlaying() {
   document.querySelectorAll(".track").forEach((el, idx) => {
@@ -184,10 +201,10 @@ function drawWaveform() {
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
-  
+
   ctx.fillStyle = "#222";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
+
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#0f0";
   ctx.beginPath();
