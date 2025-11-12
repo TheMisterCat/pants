@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>SMRT Radio</title>
+<link rel="icon" href="data:,"><!-- prevent favicon 404 -->
 <style>
   body { font-family: sans-serif; background: #111; color: #eee; margin: 0; display: flex; flex-direction: column; align-items: center; }
   header { text-align: center; margin: 1em; }
@@ -35,9 +36,9 @@
 <canvas id="waveform"></canvas>
 <div id="playlist"></div>
 
-<!-- ✅ Using the dfpwm module directly from esm.sh -->
+<!-- ✅ Using dfpwm decoder from esm.sh -->
 <script type="module">
-import { decode } from "https://esm.sh/dfpwm";
+import dfpwm from "https://esm.sh/dfpwm";
 
 const REPO = "TheMisterCat/pants";
 const AUDIO_DIR = ""; // root
@@ -84,8 +85,8 @@ async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
   const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
-  const pcm8 = decode(dfpwmBytes); // Int8Array PCM samples (-128..127)
-  
+  const pcm8 = dfpwm(dfpwmBytes); // default export: decode to Int8Array PCM
+
   // Convert Int8 to Float32 for WebAudio
   const floatData = new Float32Array(pcm8.length);
   for (let i = 0; i < pcm8.length; i++) floatData[i] = pcm8[i] / 128;
