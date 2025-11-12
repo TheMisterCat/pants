@@ -36,20 +36,14 @@
 <canvas id="waveform"></canvas>
 <div id="playlist"></div>
 
-<!-- ✅ Browser-compatible DFPWM decoder -->
 <script type="module">
-import * as DFPWM from "https://esm.sh/dfpwm";
-
-const decode =
-  DFPWM.decode ||
-  DFPWM.default?.decode ||
-  DFPWM.default ||
-  (() => { throw new Error("DFPWM module did not export decode()"); });
+// ✅ Correct import: esm.sh/dfpwm exports { DFPWMDecoder }
+import { DFPWMDecoder } from "https://esm.sh/dfpwm";
 
 const REPO = "TheMisterCat/pants";
-const AUDIO_DIR = ""; // root
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+const AUDIO_DIR = "";
 
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 const masterGainNode = audioContext.createGain();
 const filterNode = audioContext.createBiquadFilter();
 filterNode.type = "lowpass";
@@ -86,19 +80,25 @@ async function fetchPlaylist() {
   });
 }
 
-// --- LOAD AND DECODE TRACK USING PROPER DFPWM ---
+// --- LOAD AND DECODE TRACK USING DFPWMDecoder ---
 async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
   const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
 
-  // ✅ Works regardless of module shape
-  const pcm8 = decode(dfpwmBytes);
+  // ✅ Create a decoder instance
+  const decoder = new DFPWMDecoder();
 
-  // Convert Int8 to Float32 for WebAudio
+  // Decode the full file into PCM8 samples
+  const pcm8 = decoder.decode(dfpwmBytes);
+
+  // Convert Int8 → Float32 for WebAudio
   const floatData = new Float32Array(pcm8.length);
-  for (let i = 0; i < pcm8.length; i++) floatData[i] = pcm8[i] / 128;
+  for (let i = 0; i < pcm8.length; i++) {
+    floatData[i] = pcm8[i] / 128;
+  }
 
+  // Create and store WebAudio buffer
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
   trackBuffers[idx] = buffer;
@@ -129,7 +129,6 @@ function safeAction(action) {
   lastButtonTime = now;
   action();
 }
-
 function safePlay(idx) { safeAction(() => playTrack(idx)); }
 function safePause() { safeAction(pauseTrack); }
 function safeStop() { safeAction(stopTrack); }
@@ -181,10 +180,10 @@ function drawWaveform() {
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
-  
+
   ctx.fillStyle = "#222";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
+
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#0f0";
   ctx.beginPath();
