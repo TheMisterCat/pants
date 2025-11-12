@@ -36,9 +36,15 @@
 <canvas id="waveform"></canvas>
 <div id="playlist"></div>
 
-<!-- ✅ Using dfpwm decoder from esm.sh -->
+<!-- ✅ Browser-compatible DFPWM decoder -->
 <script type="module">
-import dfpwm from "https://esm.sh/dfpwm";
+import * as DFPWM from "https://esm.sh/dfpwm";
+
+const decode =
+  DFPWM.decode ||
+  DFPWM.default?.decode ||
+  DFPWM.default ||
+  (() => { throw new Error("DFPWM module did not export decode()"); });
 
 const REPO = "TheMisterCat/pants";
 const AUDIO_DIR = ""; // root
@@ -85,7 +91,9 @@ async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
   const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
-  const pcm8 = dfpwm.decode(dfpwmBytes); // default export: decode to Int8Array PCM
+
+  // ✅ Works regardless of module shape
+  const pcm8 = decode(dfpwmBytes);
 
   // Convert Int8 to Float32 for WebAudio
   const floatData = new Float32Array(pcm8.length);
@@ -199,4 +207,3 @@ fetchPlaylist();
 </script>
 </body>
 </html>
-
