@@ -98,7 +98,7 @@
 // --- CONFIG ---
 const REPO = "TheMisterCat/pants";
 const AUDIO_DIR = "";
-const VOLUME_SCALING = 0.2;
+const VOLUME_SCALING = 0.125;
 
 // --- AUDIO SETUP ---
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -122,33 +122,67 @@ let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
 let userStopped = false;
 
-// --- DECODER ---
 class Decoder {
+  /**
+   * Port of node-dfpwm Decoder to browser JS.
+   * Constructor: (fq, q, s, lt) where fq is filter state, q is charge, s is strength, lt is last target.
+   */
   constructor(fq, q, s, lt) {
-    this.fq = fq || 0; this.q = q || 0; this.s = s || 0; this.lt = lt || -128;
+    this.fq = fq || 0;
+    this.q  = q  || 0;
+    this.s  = s  || 0;
+    this.lt = lt || -128;
   }
-  decode(buffer, fs = 0xFF) {
-    const CONST_PREC = 8, output = new Float32Array(buffer.length * 8);
+
+  /**
+   * Decode 1-bit DFPWM data (Uint8Array or ArrayBuffer view) to Float32Array PCM samples.
+   * fs default matches node-dfpwm CONST_POSTFILT (140).
+   * Returns Float32Array of length buffer.length * 8 with samples in [-1, 1).
+   */
+  decode(buffer, fs = 140) {
+    // ensure we can access bytes
+    const input = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+    const CONST_PREC = 10;         // match node-dfpwm
+    const outLen = input.length * 8;
+    const out = new Float32Array(outLen);
     let outpos = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      let d = buffer[i];
+
+    for (let i = 0; i < input.length; i++) {
+      // read byte
+      let d = input[i];
       for (let j = 0; j < 8; j++) {
-        let t = (d & 1) ? 127 : -128; d >>= 1;
+        // target sample: 127 or -128
+        const t = (d & 1) ? 127 : -128;
+        d >>= 1;
+
+        // adjust charge
         let nq = this.q + ((this.s * (t - this.q) + (1 << (CONST_PREC - 1))) >> CONST_PREC);
         if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
-        let lq = this.q; this.q = nq;
-        let st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
-        let ns = this.s; if (ns !== st) ns += (st !== 0 ? 1 : -1);
+        const lq = this.q;
+        this.q = nq;
+
+        // adjust strength
+        const st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
+        let ns = this.s;
+        if (ns !== st) ns += (st !== 0 ? 1 : -1);
         if (CONST_PREC > 8 && ns < (1 << (CONST_PREC - 7))) ns = (1 << (CONST_PREC - 7));
         this.s = ns;
+
+        // FILTER: perform antijerk
         let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
+
+        // FILTER: perform LPF (postfilter)
         this.fq += ((fs * (ov - this.fq) + 0x80) >> 8);
         ov = this.fq;
-        output[outpos++] = ov / 128;
+
+        // convert signed 8-bit (-128..127) to float roughly in [-1,1)
+        out[outpos++] = ov / 128; // same scaling used previously
         this.lt = t;
       }
     }
-    return output;
+
+    return out;
   }
 }
 const decoder = new Decoder();
