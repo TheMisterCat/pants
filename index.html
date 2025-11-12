@@ -141,8 +141,28 @@ async function loadTrack(idx) {
   const arrayBuffer = await res.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  const floatData = decoder.decode(bytes);
+  // Decode DFPWM to Float32
+  const rawPCM = decoder.decode(bytes); // Int8Array output
 
+  // Convert to Float32 with volume scaling
+  const floatData = new Float32Array(rawPCM.length);
+  for (let i = 0; i < rawPCM.length; i++) {
+    floatData[i] = (rawPCM[i] / 128) * VOLUME_SCALING;
+  }
+
+  // --- Combined Smoothing + Noise Gate + Dithering ---
+  for (let i = 1; i < floatData.length; i++) {
+    // Gentle smoothing (first-order low-pass)
+    floatData[i] = 0.95 * floatData[i] + 0.05 * floatData[i - 1];
+
+    // Optional noise gate
+    if (Math.abs(floatData[i]) < 0.01) floatData[i] = 0;
+
+    // Tiny dithering to reduce quantization perception
+    floatData[i] += (Math.random() - 0.5) * 0.001;
+  }
+
+  // Create AudioBuffer
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
   trackBuffers[idx] = buffer;
@@ -248,3 +268,4 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
