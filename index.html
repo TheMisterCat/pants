@@ -1,4 +1,40 @@
-<!-- ... Keep the same head and body ... -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SMRT Radio</title>
+<link rel="icon" href="data:,">
+<style>
+  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; display: flex; flex-direction: column; align-items: center; }
+  header { text-align: center; margin: 1em; }
+  #controls { display: flex; gap: 10px; margin: 1em; align-items: center; flex-wrap: wrap; justify-content: center; }
+  button { padding: 0.5em 1em; }
+  #sliders { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #playlist { margin-top: 1em; width: 90%; max-width: 800px; overflow-y: auto; max-height: 300px; }
+  .track { padding: 0.5em; cursor: pointer; border-bottom: 1px solid #444; }
+  .track.playing { background: #333; }
+  #progress { width: 300px; margin-top: 1em; }
+  #waveform { width: 90%; max-width: 800px; height: 100px; background: #222; margin-top: 1em; }
+</style>
+</head>
+<body>
+<header><h1>SMRT Radio</h1></header>
+
+<div id="controls">
+  <button id="prev">Prev</button>
+  <button id="play">Play</button>
+  <button id="pause">Pause</button>
+  <button id="stop">Stop</button>
+  <button id="next">Next</button>
+  <div id="sliders">
+    <label>Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2"></label>
+    <label>Low‑pass: <input type="range" id="filter" min="500" max="20000" step="100" value="12000"></label>
+  </div>
+</div>
+
+<progress id="progress" value="0" max="1"></progress>
+<canvas id="waveform"></canvas>
+<div id="playlist"></div>
 
 <script type="module">
 // --- CONFIG ---
@@ -27,59 +63,62 @@ let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
 
-// --- HIGH‑QUALITY CHENTHREAD DFPWM DECODER ---
-class DFPWMDecoder {
+// --- HIGH‑QUALITY DFPWM DECODER IMPLEMENTATION ---
+class DFPWMDecoderSpec {
   constructor() {
-    this.fq = 0;
-    this.q = 0;
-    this.s = 0;
-    this.lt = -128;
-    this.CONST_PREC = 10;
-    this.CONST_POSTFILT = 140;
+    this.q = 0;        // “charge” state
+    this.s = 1;        // “strength” state
+    this.bPrev = 0;    // previous bit
+    // constants for 8‑bit sample mode
+    this.Ri = 7;
+    this.Rd = 20;
   }
 
   decode(bytes) {
-    const out = new Int8Array(bytes.length * 8);
+    const out = new Float32Array(bytes.length * 8);
     let outIdx = 0;
 
-    for (let byte of bytes) {
-      let d = byte;
-      for (let j = 0; j < 8; j++) {
-        const t = (d & 1) ? 127 : -128;
-        d >>= 1;
+    for (let byteIdx = 0; byteIdx < bytes.length; byteIdx++) {
+      const byte = bytes[byteIdx];
+      for (let bitIdx = 0; bitIdx < 8; bitIdx++) {
+        const b = (byte >> bitIdx) & 1;
+        const t = b ? 127 : -128;
 
-        let nq = this.q + ((this.s * (t - this.q) + (1 << (this.CONST_PREC-1))) >> this.CONST_PREC);
-        if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
-        const lq = this.q;
-        this.q = nq;
+        // charge update
+        let qPrime = this.q + ((this.s * (t - this.q) + 128) >> 8);
+        if (qPrime === this.q && this.q !== t) {
+          if (t < this.q) qPrime--;
+          else if (t > this.q) qPrime++;
+        }
+        this.q = qPrime;
 
-        let st = (t !== this.lt ? 0 : (1 << this.CONST_PREC)-1);
-        let ns = this.s;
-        if (ns !== st) ns += (st !== 0 ? 1 : -1);
-        if (this.CONST_PREC > 8 && ns < (1 << (this.CONST_PREC-7))) ns = (1 << (this.CONST_PREC-7));
-        this.s = ns;
+        // strength update
+        let r, z;
+        if (b === this.bPrev) {
+          r = this.Ri;
+          z = 255;
+        } else {
+          r = this.Rd;
+          z = 0;
+        }
+        let sPrime = this.s + ((r * (z - this.s) + 128) >> 8);
+        if (sPrime === this.s && this.s !== z) {
+          if (z < this.s) sPrime--;
+          else if (z > this.s) sPrime++;
+        }
+        this.s = sPrime;
 
-        let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
+        this.bPrev = b;
 
-        this.fq += ((this.CONST_POSTFILT * (ov - this.fq) + 0x80) >> 8);
-        ov = this.fq;
-
-        out[outIdx++] = ov;
-        this.lt = t;
+        // output sample normalization to Float32
+        out[outIdx++] = (this.q / 128) * VOLUME_SCALING;
       }
     }
     return out;
   }
-
-  decodeFloat32(bytes, volume = VOLUME_SCALING) {
-    const int8 = this.decode(bytes);
-    const f32 = new Float32Array(int8.length);
-    for (let i = 0; i < int8.length; i++) f32[i] = (int8[i] / 128) * volume;
-    return f32;
-  }
 }
 
-const decoder = new DFPWMDecoder();
+const decoder = new DFPWMDecoderSpec();
 
 // --- FETCH PLAYLIST ---
 async function fetchPlaylist() {
@@ -106,7 +145,7 @@ async function loadTrack(idx) {
   const arrayBuffer = await res.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  const floatData = decoder.decodeFloat32(bytes);
+  const floatData = decoder.decode(bytes);
 
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
@@ -165,20 +204,6 @@ function highlightPlaying() {
   });
 }
 
-// --- UI Event Listeners ---
-document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
-document.getElementById("pause").onclick = safePause;
-document.getElementById("stop").onclick = safeStop;
-document.getElementById("next").onclick = safeNext;
-document.getElementById("prev").onclick = safePrev;
-
-document.getElementById("volume").addEventListener("input", e => {
-  masterGainNode.gain.value = parseFloat(e.target.value);
-});
-document.getElementById("filter").addEventListener("input", e => {
-  filterNode.frequency.value = parseFloat(e.target.value);
-});
-
 // --- WAVEFORM VISUALIZATION ---
 const canvas = document.getElementById("waveform");
 const ctx = canvas.getContext("2d");
@@ -208,6 +233,23 @@ function drawWaveform() {
 }
 drawWaveform();
 
-// --- INIT ---
-fetchPlaylist();
+// --- INIT & UI LISTENERS (DOM READY) ---
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
+  document.getElementById("pause").onclick = safePause;
+  document.getElementById("stop").onclick = safeStop;
+  document.getElementById("next").onclick = safeNext;
+  document.getElementById("prev").onclick = safePrev;
+
+  document.getElementById("volume").addEventListener("input", e => {
+    masterGainNode.gain.value = parseFloat(e.target.value);
+  });
+  document.getElementById("filter").addEventListener("input", e => {
+    filterNode.frequency.value = parseFloat(e.target.value);
+  });
+
+  fetchPlaylist();
+});
 </script>
+</body>
+</html>
