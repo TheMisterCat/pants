@@ -62,56 +62,50 @@ let trackBuffers = [];
 let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
+let userStopped = false; // NEW — prevents unwanted auto-advance
 
 // --- EXACT BROWSER-FRIENDLY DFPWM DECODER ---
 class Decoder {
-    constructor(fq, q, s, lt) {
-        this.fq = fq || 0;
-        this.q  = q  || 0;
-        this.s  = s  || 0;
-        this.lt = lt || -128;
+  constructor(fq, q, s, lt) {
+    this.fq = fq || 0;
+    this.q  = q  || 0;
+    this.s  = s  || 0;
+    this.lt = lt || -128;
+  }
+
+  decode(buffer, fs = 0xFF) {
+    const CONST_PREC = 8;
+    const output = new Float32Array(buffer.length * 8);
+    let outpos = 0;
+
+    for (let i = 0; i < buffer.length; i++) {
+      let d = buffer[i];
+      for (let j = 0; j < 8; j++) {
+        let t = (d & 1) ? 127 : -128;
+        d >>= 1;
+
+        let nq = this.q + ((this.s * (t - this.q) + (1 << (CONST_PREC - 1))) >> CONST_PREC);
+        if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
+        let lq = this.q;
+        this.q = nq;
+
+        let st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
+        let ns = this.s;
+        if (ns !== st) ns += (st !== 0 ? 1 : -1);
+        if (CONST_PREC > 8 && ns < (1 << (CONST_PREC - 7))) ns = (1 << (CONST_PREC - 7));
+        this.s = ns;
+
+        let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
+        this.fq += ((fs * (ov - this.fq) + 0x80) >> 8);
+        ov = this.fq;
+
+        output[outpos++] = ov / 128;
+        this.lt = t;
+      }
     }
 
-    decode(buffer, fs = 0xFF) {
-        const CONST_PREC = 8;
-        const output = new Float32Array(buffer.length * 8);
-        let outpos = 0;
-
-        for (let i = 0; i < buffer.length; i++) {
-            let d = buffer[i];
-            for (let j = 0; j < 8; j++) {
-                let t = (d & 1) ? 127 : -128;
-                d >>= 1;
-
-                // adjust charge
-                let nq = this.q + ((this.s * (t - this.q) + (1 << (CONST_PREC - 1))) >> CONST_PREC);
-                if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
-                let lq = this.q;
-                this.q = nq;
-
-                // adjust strength
-                let st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
-                let ns = this.s;
-                if (ns !== st) ns += (st !== 0 ? 1 : -1);
-                if (CONST_PREC > 8 && ns < (1 << (CONST_PREC - 7))) ns = (1 << (CONST_PREC - 7));
-                this.s = ns;
-
-                // FILTER: perform antijerk
-                let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
-
-                // FILTER: perform LPF
-                this.fq += ((fs * (ov - this.fq) + 0x80) >> 8);
-                ov = this.fq;
-
-                // output sample as float
-                output[outpos++] = ov / 128;
-
-                this.lt = t;
-            }
-        }
-
-        return output;
-    }
+    return output;
+  }
 }
 
 const decoder = new Decoder();
@@ -140,7 +134,6 @@ async function loadTrack(idx) {
   const res = await fetch(url);
   const arrayBuffer = await res.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
-
   const floatData = decoder.decode(bytes);
 
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
@@ -150,20 +143,52 @@ async function loadTrack(idx) {
 
 // --- PLAYBACK LOGIC ---
 async function playTrack(idx) {
-  if (currentSource) currentSource.stop();
+  if (currentSource) {
+    userStopped = true; // prevent previous source's onended from chaining
+    currentSource.stop();
+  }
+
   currentTrackIndex = idx;
   highlightPlaying();
+
   if (!trackBuffers[idx]) await loadTrack(idx);
 
   const source = audioContext.createBufferSource();
   source.buffer = trackBuffers[idx];
   source.connect(masterGainNode);
-  source.start(0);
   currentSource = source;
+  userStopped = false; // reset for this track
+
+  source.start(0);
+
   source.onended = () => {
     currentSource = null;
-    nextTrack();
+    if (!userStopped) nextTrack(); // only auto-advance naturally
   };
+}
+
+function stopTrack() {
+  if (currentSource) {
+    userStopped = true;
+    currentSource.stop();
+    currentSource = null;
+  }
+}
+
+function nextTrack() {
+  if (!playlist.length) return;
+  userStopped = true;
+  if (currentSource) currentSource.stop();
+  const next = (currentTrackIndex + 1) % playlist.length;
+  playTrack(next);
+}
+
+function prevTrack() {
+  if (!playlist.length) return;
+  userStopped = true;
+  if (currentSource) currentSource.stop();
+  const prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+  playTrack(prev);
 }
 
 // --- BUTTON SAFETY & CONTROL ---
@@ -173,26 +198,18 @@ function safeAction(action) {
   lastButtonTime = now;
   action();
 }
-function safePlay(idx) { safeAction(() => playTrack(idx)); }
+
+function safePlay(idx) {
+  safeAction(() => {
+    userStopped = true;
+    if (currentSource) currentSource.stop();
+    playTrack(idx);
+  });
+}
 function safePause() { safeAction(stopTrack); }
 function safeStop() { safeAction(stopTrack); }
 function safeNext() { safeAction(nextTrack); }
 function safePrev() { safeAction(prevTrack); }
-
-function stopTrack() {
-  if (currentSource) currentSource.stop();
-  currentSource = null;
-}
-
-function nextTrack() {
-  let next = (currentTrackIndex + 1) % playlist.length;
-  playTrack(next);
-}
-
-function prevTrack() {
-  let prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-  playTrack(prev);
-}
 
 function highlightPlaying() {
   document.querySelectorAll(".track").forEach((el, idx) => {
@@ -238,7 +255,7 @@ function drawWaveform() {
     else ctx.lineTo(x, y);
     x += sliceWidth;
   }
-  ctx.lineTo(canvas.width, canvas.height/2);
+  ctx.lineTo(canvas.width, canvas.height / 2);
   ctx.stroke();
 }
 drawWaveform();
@@ -246,8 +263,10 @@ drawWaveform();
 // --- INIT ---
 fetchPlaylist();
 </script>
+
 </body>
 </html>
+
 
 
 
