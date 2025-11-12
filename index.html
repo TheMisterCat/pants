@@ -85,7 +85,7 @@ async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
   const dfpwmBytes = new Uint8Array(await res.arrayBuffer());
-  const pcm8 = dfpwm(dfpwmBytes); // default export: decode to Int8Array PCM
+  const pcm8 = dfpwm.decode(dfpwmBytes); // default export: decode to Int8Array PCM
 
   // Convert Int8 to Float32 for WebAudio
   const floatData = new Float32Array(pcm8.length);
@@ -199,3 +199,4 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
