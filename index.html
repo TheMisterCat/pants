@@ -5,30 +5,88 @@
 <title>SMRT Radio</title>
 <link rel="icon" href="data:,">
 <style>
-  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; display: flex; flex-direction: column; align-items: center; }
-  header { text-align: center; margin: 1em; }
-  #controls { display: flex; gap: 10px; margin: 1em; align-items: center; flex-wrap: wrap; justify-content: center; }
-  button { padding: 0.5em 1em; }
-  #sliders { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  #playlist { margin-top: 1em; width: 90%; max-width: 800px; overflow-y: auto; max-height: 300px; }
-  .track { padding: 0.5em; cursor: pointer; border-bottom: 1px solid #444; }
-  .track.playing { background: #333; }
-  #progress { width: 300px; margin-top: 1em; }
-  #waveform { width: 90%; max-width: 800px; height: 100px; background: #222; margin-top: 1em; }
+  body {
+    font-family: sans-serif;
+    background: #111;
+    color: #eee;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  header {
+    text-align: center;
+    margin: 1em;
+  }
+  #controls {
+    display: flex;
+    gap: 10px;
+    margin: 1em;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    padding: 0.5em 1em;
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 0.5em;
+    color: #eee;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover {
+    background: #333;
+  }
+  #sliders {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  #playlist {
+    margin-top: 1em;
+    width: 90%;
+    max-width: 800px;
+    overflow-y: auto;
+    max-height: 300px;
+  }
+  .track {
+    padding: 0.5em;
+    cursor: pointer;
+    border-bottom: 1px solid #444;
+  }
+  .track.playing {
+    background: #333;
+  }
+  #progress {
+    width: 300px;
+    margin-top: 1em;
+  }
+  #waveform {
+    width: 90%;
+    max-width: 800px;
+    height: 100px;
+    background: #222;
+    margin-top: 1em;
+  }
 </style>
 </head>
 <body>
 <header><h1>SMRT Radio</h1></header>
 
 <div id="controls">
-  <button id="prev">Prev</button>
-  <button id="play">Play</button>
-  <button id="pause">Pause</button>
-  <button id="stop">Stop</button>
-  <button id="next">Next</button>
+  <button id="prev">⏮️ Prev</button>
+  <button id="play">▶️ Play</button>
+  <button id="stop">⏹️ Stop</button>
+  <button id="next">Next ⏭️</button>
   <div id="sliders">
-    <label>Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2"></label>
-    <label>Low‑pass: <input type="range" id="filter" min="500" max="20000" step="100" value="12000"></label>
+    <label>🔊 Volume:
+      <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2">
+    </label>
+    <label>🎚️ Low-pass:
+      <input type="range" id="filter" min="500" max="20000" step="100" value="12000">
+    </label>
   </div>
 </div>
 
@@ -55,59 +113,44 @@ const analyser = audioContext.createAnalyser();
 analyser.fftSize = 2048;
 filterNode.connect(analyser);
 
-// --- PLAYLIST & TRACK STATE ---
+// --- STATE ---
 let currentSource = null;
 let currentTrackIndex = 0;
 let trackBuffers = [];
 let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
-let userStopped = false; // NEW — prevents unwanted auto-advance
+let userStopped = false;
 
-// --- EXACT BROWSER-FRIENDLY DFPWM DECODER ---
+// --- DECODER ---
 class Decoder {
   constructor(fq, q, s, lt) {
-    this.fq = fq || 0;
-    this.q  = q  || 0;
-    this.s  = s  || 0;
-    this.lt = lt || -128;
+    this.fq = fq || 0; this.q = q || 0; this.s = s || 0; this.lt = lt || -128;
   }
-
   decode(buffer, fs = 0xFF) {
-    const CONST_PREC = 8;
-    const output = new Float32Array(buffer.length * 8);
+    const CONST_PREC = 8, output = new Float32Array(buffer.length * 8);
     let outpos = 0;
-
     for (let i = 0; i < buffer.length; i++) {
       let d = buffer[i];
       for (let j = 0; j < 8; j++) {
-        let t = (d & 1) ? 127 : -128;
-        d >>= 1;
-
+        let t = (d & 1) ? 127 : -128; d >>= 1;
         let nq = this.q + ((this.s * (t - this.q) + (1 << (CONST_PREC - 1))) >> CONST_PREC);
         if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
-        let lq = this.q;
-        this.q = nq;
-
+        let lq = this.q; this.q = nq;
         let st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
-        let ns = this.s;
-        if (ns !== st) ns += (st !== 0 ? 1 : -1);
+        let ns = this.s; if (ns !== st) ns += (st !== 0 ? 1 : -1);
         if (CONST_PREC > 8 && ns < (1 << (CONST_PREC - 7))) ns = (1 << (CONST_PREC - 7));
         this.s = ns;
-
         let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
         this.fq += ((fs * (ov - this.fq) + 0x80) >> 8);
         ov = this.fq;
-
         output[outpos++] = ov / 128;
         this.lt = t;
       }
     }
-
     return output;
   }
 }
-
 const decoder = new Decoder();
 
 // --- FETCH PLAYLIST ---
@@ -116,7 +159,6 @@ async function fetchPlaylist() {
   const res = await fetch(url);
   const files = await res.json();
   playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
-
   const listDiv = document.getElementById("playlist");
   listDiv.innerHTML = "";
   playlist.forEach((name, idx) => {
@@ -128,42 +170,34 @@ async function fetchPlaylist() {
   });
 }
 
-// --- LOAD & DECODE TRACK ---
+// --- LOAD & DECODE ---
 async function loadTrack(idx) {
   const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
   const res = await fetch(url);
-  const arrayBuffer = await res.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
+  const bytes = new Uint8Array(await res.arrayBuffer());
   const floatData = decoder.decode(bytes);
-
   const buffer = audioContext.createBuffer(1, floatData.length, 48000);
   buffer.copyToChannel(floatData, 0, 0);
   trackBuffers[idx] = buffer;
 }
 
-// --- PLAYBACK LOGIC ---
+// --- PLAYBACK ---
 async function playTrack(idx) {
-  if (currentSource) {
-    userStopped = true; // prevent previous source's onended from chaining
-    currentSource.stop();
-  }
-
+  if (currentSource) { userStopped = true; currentSource.stop(); }
   currentTrackIndex = idx;
   highlightPlaying();
-
   if (!trackBuffers[idx]) await loadTrack(idx);
 
   const source = audioContext.createBufferSource();
   source.buffer = trackBuffers[idx];
   source.connect(masterGainNode);
   currentSource = source;
-  userStopped = false; // reset for this track
+  userStopped = false;
 
   source.start(0);
-
   source.onended = () => {
     currentSource = null;
-    if (!userStopped) nextTrack(); // only auto-advance naturally
+    if (!userStopped) nextTrack();
   };
 }
 
@@ -174,7 +208,6 @@ function stopTrack() {
     currentSource = null;
   }
 }
-
 function nextTrack() {
   if (!playlist.length) return;
   userStopped = true;
@@ -182,7 +215,6 @@ function nextTrack() {
   const next = (currentTrackIndex + 1) % playlist.length;
   playTrack(next);
 }
-
 function prevTrack() {
   if (!playlist.length) return;
   userStopped = true;
@@ -191,14 +223,13 @@ function prevTrack() {
   playTrack(prev);
 }
 
-// --- BUTTON SAFETY & CONTROL ---
+// --- SAFETY WRAPPERS ---
 function safeAction(action) {
   const now = performance.now();
   if (now - lastButtonTime < BUTTON_COOLDOWN) return;
   lastButtonTime = now;
   action();
 }
-
 function safePlay(idx) {
   safeAction(() => {
     userStopped = true;
@@ -206,7 +237,6 @@ function safePlay(idx) {
     playTrack(idx);
   });
 }
-function safePause() { safeAction(stopTrack); }
 function safeStop() { safeAction(stopTrack); }
 function safeNext() { safeAction(nextTrack); }
 function safePrev() { safeAction(prevTrack); }
@@ -217,21 +247,28 @@ function highlightPlaying() {
   });
 }
 
-// --- UI Event Listeners ---
+// --- UI LISTENERS ---
 document.getElementById("play").onclick = () => safePlay(currentTrackIndex);
-document.getElementById("pause").onclick = safePause;
 document.getElementById("stop").onclick = safeStop;
 document.getElementById("next").onclick = safeNext;
 document.getElementById("prev").onclick = safePrev;
 
-document.getElementById("volume").addEventListener("input", e => {
+// --- SLIDERS ---
+const volumeSlider = document.getElementById("volume");
+const filterSlider = document.getElementById("filter");
+
+volumeSlider.addEventListener("input", e => {
   masterGainNode.gain.value = parseFloat(e.target.value);
 });
-document.getElementById("filter").addEventListener("input", e => {
+filterSlider.addEventListener("input", e => {
   filterNode.frequency.value = parseFloat(e.target.value);
 });
 
-// --- WAVEFORM VISUALIZATION ---
+// Apply initial slider values immediately
+masterGainNode.gain.value = parseFloat(volumeSlider.value);
+filterNode.frequency.value = parseFloat(filterSlider.value);
+
+// --- VISUALIZER ---
 const canvas = document.getElementById("waveform");
 const ctx = canvas.getContext("2d");
 function drawWaveform() {
@@ -239,10 +276,8 @@ function drawWaveform() {
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
-
   ctx.fillStyle = "#222";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#0f0";
   ctx.beginPath();
@@ -263,10 +298,5 @@ drawWaveform();
 // --- INIT ---
 fetchPlaylist();
 </script>
-
 </body>
 </html>
-
-
-
-
