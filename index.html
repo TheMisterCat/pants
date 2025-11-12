@@ -63,52 +63,58 @@ let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
 
-// --- HIGH-QUALITY DFPWM DECODER ---
-class DFPWMDecoderSpec {
-  constructor() {
-    this.q = 0;       // charge
-    this.s = 127;     // strength (0–255)
-    this.bPrev = 0;   // previous bit
-  }
-
-  decode(bytes) {
-    const out = new Float32Array(bytes.length * 8);
-    let outIdx = 0;
-
-    for (let i = 0; i < bytes.length; i++) {
-      const byte = bytes[i];
-      for (let bit = 0; bit < 8; bit++) {
-        const b = (byte >> bit) & 1;
-        const target = b ? 127 : -128;
-
-        // smooth charge towards target
-        this.q += ((target - this.q) * this.s + 128) >> 8;
-
-        // update strength
-        if (b === this.bPrev) {
-          this.s += ((255 - this.s) * 7 + 128) >> 8;   // ramp up
-        } else {
-          this.s += ((0 - this.s) * 20 + 128) >> 8;    // ramp down
-        }
-
-        // clamp strength
-        if (this.s < 0) this.s = 0;
-        else if (this.s > 255) this.s = 255;
-
-        this.bPrev = b;
-
-        // subtle dither: tiny random offset to smooth quantization
-        const dither = (Math.random() - 0.5) * (1 / 128);
-
-        out[outIdx++] = ((this.q / 128) + dither) * VOLUME_SCALING;
-      }
+// --- EXACT BROWSER-FRIENDLY DFPWM DECODER ---
+class Decoder {
+    constructor(fq, q, s, lt) {
+        this.fq = fq || 0;
+        this.q  = q  || 0;
+        this.s  = s  || 0;
+        this.lt = lt || -128;
     }
 
-    return out;
-  }
+    decode(buffer, fs = 0xFF) {
+        const CONST_PREC = 8;
+        const output = new Float32Array(buffer.length * 8);
+        let outpos = 0;
+
+        for (let i = 0; i < buffer.length; i++) {
+            let d = buffer[i];
+            for (let j = 0; j < 8; j++) {
+                let t = (d & 1) ? 127 : -128;
+                d >>= 1;
+
+                // adjust charge
+                let nq = this.q + ((this.s * (t - this.q) + (1 << (CONST_PREC - 1))) >> CONST_PREC);
+                if (nq === this.q && nq !== t) this.q += (t === 127 ? 1 : -1);
+                let lq = this.q;
+                this.q = nq;
+
+                // adjust strength
+                let st = (t !== this.lt ? 0 : (1 << CONST_PREC) - 1);
+                let ns = this.s;
+                if (ns !== st) ns += (st !== 0 ? 1 : -1);
+                if (CONST_PREC > 8 && ns < (1 << (CONST_PREC - 7))) ns = (1 << (CONST_PREC - 7));
+                this.s = ns;
+
+                // FILTER: perform antijerk
+                let ov = (t !== this.lt ? (nq + lq + 1) >> 1 : nq);
+
+                // FILTER: perform LPF
+                this.fq += ((fs * (ov - this.fq) + 0x80) >> 8);
+                ov = this.fq;
+
+                // output sample as float
+                output[outpos++] = ov / 128;
+
+                this.lt = t;
+            }
+        }
+
+        return output;
+    }
 }
 
-const decoder = new DFPWMDecoderSpec();
+const decoder = new Decoder();
 
 // --- FETCH PLAYLIST ---
 async function fetchPlaylist() {
