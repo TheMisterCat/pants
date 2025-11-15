@@ -403,28 +403,46 @@ resizeCanvasForDisplay();
 
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
-  resizeCanvasForDisplay();
 
+  // Fade the previous frame slightly to create a trail effect
+  ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Time-domain waveform data
   const bufferLength = analyser.fftSize;
-  const dataArray = new Uint8Array(bufferLength);
-  analyser.getByteTimeDomainData(dataArray);
-  // draw background
-  ctx.fillStyle = "#222";
-  ctx.fillRect(0, 0, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+  const timeData = new Uint8Array(bufferLength);
+  analyser.getByteTimeDomainData(timeData);
 
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "#0f0";
+  // Frequency data (for bass-based color shifting)
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(freqData);
+
+  // Compute bass intensity (first ~12 low-frequency bins)
+  let bass = 0;
+  const bassBins = 12;
+  for (let i = 0; i < bassBins; i++) bass += freqData[i];
+  bass /= bassBins; // normalize 0–255
+
+  // Color hue shifts with bass
+  const hue = (bass * 1.5) % 360;
+
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
   ctx.beginPath();
-  const sliceWidth = (canvas.width / (window.devicePixelRatio || 1)) / bufferLength;
+
+  const sliceWidth = canvas.width / bufferLength;
   let x = 0;
+
   for (let i = 0; i < bufferLength; i++) {
-    const v = dataArray[i] / 128.0;
-    const y = v * (canvas.height / (window.devicePixelRatio || 1)) / 2;
+    const v = timeData[i] / 128.0;
+    const y = (v * canvas.height) / 2;
+
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
+
     x += sliceWidth;
   }
-  ctx.lineTo(canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1) / 2);
+
   ctx.stroke();
 }
 drawWaveform();
@@ -434,6 +452,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
