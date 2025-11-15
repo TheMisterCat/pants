@@ -404,8 +404,8 @@ resizeCanvasForDisplay();
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
 
-  // Fade the previous frame slightly to create a trail effect
-  ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+  // Smaller trail fade for more responsiveness (higher opacity = less persistence)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Time-domain waveform data
@@ -413,37 +413,43 @@ function drawWaveform() {
   const timeData = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(timeData);
 
-  // Frequency data (for bass-based color shifting)
+  // Frequency-domain data
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
-
-  // Compute bass intensity (first ~12 low-frequency bins)
-  let bass = 0;
-  const bassBins = 12;
-  for (let i = 0; i < bassBins; i++) bass += freqData[i];
-  bass /= bassBins; // normalize 0–255
-
-  // Color hue shifts with bass
-  const hue = (bass * 1.5) % 360;
-
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
-  ctx.beginPath();
 
   const sliceWidth = canvas.width / bufferLength;
   let x = 0;
 
-  for (let i = 0; i < bufferLength; i++) {
-    const v = timeData[i] / 128.0;
-    const y = (v * canvas.height) / 2;
+  // Draw small waveform segments with locally-determined color
+  for (let i = 1; i < bufferLength; i++) {
+    const v1 = timeData[i - 1] / 128.0;
+    const v2 = timeData[i] / 128.0;
 
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    const y1 = (v1 * canvas.height) / 2;
+    const y2 = (v2 * canvas.height) / 2;
+
+    // Map sample index to a frequency bin (approx)
+    const freqIndex = Math.floor((i / bufferLength) * freqData.length);
+    const amp = freqData[freqIndex] / 255; // normalized 0–1
+
+    // Color based on frequency amplitude:
+    //   Bass (low index): tends toward red
+    //   Mids: yellow/green
+    //   Highs: blue/cyan
+    const hue = (freqIndex / freqData.length) * 300; // 0 = red, 300 = violet
+    const lightness = 40 + amp * 30;  // stronger amplitude = brighter
+    const saturation = 80;            // vivid color
+
+    ctx.strokeStyle = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.moveTo(x - sliceWidth, y1);
+    ctx.lineTo(x, y2);
+    ctx.stroke();
 
     x += sliceWidth;
   }
-
-  ctx.stroke();
 }
 drawWaveform();
 
@@ -452,6 +458,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
