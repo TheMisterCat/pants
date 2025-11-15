@@ -108,16 +108,19 @@ filterNode.connect(audioContext.destination);
 
 const analyser = audioContext.createAnalyser();
 analyser.fftSize = 2048;
+// connect analyser from the same node feeding destination so waveform is visible
 filterNode.connect(analyser);
 
 // --- STATE ---
-let currentSource = null;
+let currentSource = null;        // currently playing AudioBufferSourceNode
+let currentSourceOnEnded = null; // saved onended handler so we can detach it
 let currentTrackIndex = 0;
 let trackBuffers = [];
 let playlist = [];
 let lastButtonTime = 0;
 const BUTTON_COOLDOWN = 250;
 let userStopped = false;
+let loadingPromises = {}; // to avoid duplicate concurrent loads
 
 class Decoder {
   /**
@@ -186,10 +189,16 @@ const decoder = new Decoder();
 
 // --- FETCH PLAYLIST ---
 async function fetchPlaylist() {
-  const url = `https://api.github.com/repos/${REPO}/contents/${AUDIO_DIR}`;
-  const res = await fetch(url);
-  const files = await res.json();
-  playlist = files.filter(f => f.name.endsWith(".dfpwm")).map(f => f.name);
+  try {
+    const url = `https://api.github.com/repos/${REPO}/contents/${AUDIO_DIR}`;
+    const res = await fetch(url);
+    const files = await res.json();
+    playlist = (Array.isArray(files) ? files : []).filter(f => f.name && f.name.endsWith(".dfpwm")).map(f => f.name);
+  } catch (e) {
+    console.error("Failed to fetch playlist:", e);
+    playlist = [];
+  }
+
   const listDiv = document.getElementById("playlist");
   listDiv.innerHTML = "";
   playlist.forEach((name, idx) => {
@@ -199,58 +208,135 @@ async function fetchPlaylist() {
     div.onclick = () => safePlay(idx);
     listDiv.appendChild(div);
   });
+  highlightPlaying();
 }
 
 // --- LOAD & DECODE ---
 async function loadTrack(idx) {
-  const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
-  const res = await fetch(url);
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const floatData = decoder.decode(bytes);
-  const buffer = audioContext.createBuffer(1, floatData.length, 48000);
-  buffer.copyToChannel(floatData, 0, 0);
-  trackBuffers[idx] = buffer;
+  // avoid duplicate concurrent loads for same index
+  if (trackBuffers[idx]) return trackBuffers[idx];
+  if (loadingPromises[idx]) return loadingPromises[idx];
+
+  const p = (async () => {
+    const url = `https://raw.githubusercontent.com/${REPO}/main/${AUDIO_DIR}${playlist[idx]}`;
+    const res = await fetch(url);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const floatData = decoder.decode(bytes);
+    // create buffer at 48000Hz as before
+    const buffer = audioContext.createBuffer(1, floatData.length, 48000);
+    buffer.copyToChannel(floatData, 0, 0);
+    trackBuffers[idx] = buffer;
+    delete loadingPromises[idx];
+    return buffer;
+  })();
+
+  loadingPromises[idx] = p;
+  return p;
+}
+
+// --- UTILS for safe source stop/cleanup ---
+function detachAndStopCurrentSource() {
+  if (!currentSource) return;
+  try {
+    // detach onended to prevent previous source firing change-of-track logic
+    if (currentSourceOnEnded) {
+      try { currentSource.removeEventListener('ended', currentSourceOnEnded); } catch(e) {}
+      currentSourceOnEnded = null;
+    } else {
+      // also try setting onended to null in case it was assigned directly
+      try { currentSource.onended = null; } catch(e) {}
+    }
+    // stop the node (safe-guard in try/catch)
+    try { currentSource.stop(0); } catch(e) {}
+  } finally {
+    currentSource = null;
+  }
 }
 
 // --- PLAYBACK ---
 async function playTrack(idx) {
-  if (currentSource) { userStopped = true; currentSource.stop(); }
+  // ensure audioContext resumed on user gesture
+  if (audioContext.state === 'suspended') {
+    try { await audioContext.resume(); } catch (e) { /*ignore*/ }
+  }
+
+  // stop and fully detach any existing source before creating a new one
+  detachAndStopCurrentSource();
+
   currentTrackIndex = idx;
   highlightPlaying();
-  if (!trackBuffers[idx]) await loadTrack(idx);
+
+  // ensure buffer loaded (await if necessary)
+  if (!trackBuffers[idx]) {
+    try {
+      await loadTrack(idx);
+    } catch (e) {
+      console.error("failed to load track", idx, e);
+      return;
+    }
+  }
+
+  // If user has manually stopped (userStopped === true), clear that because we're intentionally starting playback now.
+  userStopped = false;
 
   const source = audioContext.createBufferSource();
   source.buffer = trackBuffers[idx];
   source.connect(masterGainNode);
   currentSource = source;
-  userStopped = false;
 
-  source.start(0);
-  source.onended = () => {
+  // attach a stable onended handler and save it so we can remove it if we stop the source manually
+  const onEnded = () => {
+    // only auto-advance if we didn't intentionally stop
     currentSource = null;
-    if (!userStopped) nextTrack();
+    currentSourceOnEnded = null;
+    if (!userStopped) {
+      nextTrack(true); // indicate autoplay transition
+    }
+    highlightPlaying();
   };
+  currentSourceOnEnded = onEnded;
+  // prefer addEventListener for easier removal
+  try {
+    source.addEventListener('ended', onEnded);
+  } catch (e) {
+    // fallback
+    source.onended = onEnded;
+  }
+
+  // start playback
+  try {
+    source.start(0);
+  } catch (e) {
+    console.error("Error starting source:", e);
+    // cleanup on error
+    detachAndStopCurrentSource();
+    return;
+  }
 }
 
 function stopTrack() {
   if (currentSource) {
+    // mark that user intentionally stopped playback so onended handlers don't auto-advance
     userStopped = true;
-    currentSource.stop();
-    currentSource = null;
+    detachAndStopCurrentSource();
+    highlightPlaying();
   }
 }
-function nextTrack() {
+
+function nextTrack(fromAutoplay = false) {
   if (!playlist.length) return;
-  userStopped = true;
-  if (currentSource) currentSource.stop();
+  // if called by autoplay, only proceed when autoplay triggers it (userStopped should be false)
+  // compute next index and play
   const next = (currentTrackIndex + 1) % playlist.length;
+  // start next track; this is a deliberate play so ensure userStopped=false
+  userStopped = false;
   playTrack(next);
 }
+
 function prevTrack() {
   if (!playlist.length) return;
-  userStopped = true;
-  if (currentSource) currentSource.stop();
   const prev = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+  userStopped = false;
   playTrack(prev);
 }
 
@@ -263,18 +349,20 @@ function safeAction(action) {
 }
 function safePlay(idx) {
   safeAction(() => {
-    userStopped = true;
-    if (currentSource) currentSource.stop();
+    // user wants to play this track: ensure we treat it as an intentional play
+    userStopped = false;
+    // stop current source immediately and start the new one
+    detachAndStopCurrentSource();
     playTrack(idx);
   });
 }
 function safeStop() { safeAction(stopTrack); }
-function safeNext() { safeAction(nextTrack); }
-function safePrev() { safeAction(prevTrack); }
+function safeNext() { safeAction(() => { userStopped = false; nextTrack(); }); }
+function safePrev() { safeAction(() => { userStopped = false; prevTrack(); }); }
 
 function highlightPlaying() {
   document.querySelectorAll(".track").forEach((el, idx) => {
-    el.classList.toggle("playing", idx === currentTrackIndex);
+    el.classList.toggle("playing", idx === currentTrackIndex && currentSource);
   });
 }
 
@@ -288,35 +376,55 @@ document.getElementById("prev").onclick = safePrev;
 const volumeSlider = document.getElementById("volume");
 
 volumeSlider.addEventListener("input", e => {
-  masterGainNode.gain.value = parseFloat(e.target.value);
+  masterGainNode.gain.value = parseFloat(e.target.value) * VOLUME_SCALING;
 });
 
 // Apply initial slider values immediately
-masterGainNode.gain.value = parseFloat(volumeSlider.value);
+masterGainNode.gain.value = parseFloat(volumeSlider.value) * VOLUME_SCALING;
 
 // --- VISUALIZER ---
 const canvas = document.getElementById("waveform");
 const ctx = canvas.getContext("2d");
+
+function resizeCanvasForDisplay() {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.floor(rect.width * ratio));
+  const h = Math.max(1, Math.floor(rect.height * ratio));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(ratio, ratio);
+  }
+}
+window.addEventListener('resize', resizeCanvasForDisplay);
+resizeCanvasForDisplay();
+
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
+  resizeCanvasForDisplay();
+
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
+  // draw background
   ctx.fillStyle = "#222";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+
   ctx.lineWidth = 2;
   ctx.strokeStyle = "#0f0";
   ctx.beginPath();
-  const sliceWidth = canvas.width / bufferLength;
+  const sliceWidth = (canvas.width / (window.devicePixelRatio || 1)) / bufferLength;
   let x = 0;
   for (let i = 0; i < bufferLength; i++) {
     const v = dataArray[i] / 128.0;
-    const y = v * canvas.height / 2;
+    const y = v * (canvas.height / (window.devicePixelRatio || 1)) / 2;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
     x += sliceWidth;
   }
-  ctx.lineTo(canvas.width, canvas.height / 2);
+  ctx.lineTo(canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1) / 2);
   ctx.stroke();
 }
 drawWaveform();
