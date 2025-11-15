@@ -402,12 +402,12 @@ window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
 let zoomScale = 1;
 
-// Per-band state
+// Per-band state: jitter, phase, hue, and smoothed amplitude
 const bandState = [
-  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0},
-  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0},
-  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0},
-  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0}
+  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0, smoothAmp: 0},
+  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0, smoothAmp: 0},
+  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0, smoothAmp: 0},
+  {xJitter: 0, yJitter: 0, phase: 0, hueShift: 0, smoothAmp: 0}
 ];
 
 function drawWaveform() {
@@ -432,7 +432,7 @@ function drawWaveform() {
   const targetZoom = 1 + kick * 0.25;
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
-  // --- Frequency bands, adjusted for 0-9600Hz cap ---
+  // --- Frequency bands ---
   const nyquist = audioContext.sampleRate / 2;
   const usableMaxFreq = Math.min(nyquist, 9600);
   const freqScale = usableMaxFreq / nyquist;
@@ -445,10 +445,10 @@ function drawWaveform() {
   ];
 
   const baseColors = [
-    [0, 100, 50],    // Bass
-    [60, 90, 50],    // Low mids
-    [180, 80, 50],   // High mids
-    [300, 80, 50]    // Treble
+    [0, 100, 50],
+    [60, 90, 50],
+    [180, 80, 50],
+    [300, 80, 50]
   ];
 
   const sliceWidth = width / bufferLength;
@@ -469,12 +469,12 @@ function drawWaveform() {
 
   // Draw bands
   for (let band = 0; band < 4; band++) {
-    const [startFrac, endFrac] = bandRanges[band];
-    const startIdx = Math.floor(startFrac * freqData.length);
-    const endIdx = Math.floor(endFrac * freqData.length);
+    let bandAmp = bandAmps[band] * normFactor;
 
-    const bandAmp = bandAmps[band] * normFactor;
-    if (bandAmp < 0.01) continue;
+    // Smooth amplitude per band
+    bandState[band].smoothAmp += (bandAmp - bandState[band].smoothAmp) * 0.05;
+    const smoothAmp = bandState[band].smoothAmp;
+    if (smoothAmp < 0.01) continue; // skip near-silent bands
 
     // Vertical scaling factor
     let verticalFactor;
@@ -485,33 +485,32 @@ function drawWaveform() {
       case 3: verticalFactor = 0.6; break;
     }
 
-    // Hue shift over time, modulated by amplitude
+    // Hue shift over time
     bandState[band].hueShift += 0.3 + band * 0.1;
-    const hue = (baseColors[band][0] + bandState[band].hueShift * bandAmp) % 360;
+    const hue = (baseColors[band][0] + bandState[band].hueShift * smoothAmp) % 360;
     const sat = baseColors[band][1];
-    const light = baseColors[band][2] + bandAmp * 35;
+    const light = baseColors[band][2] + smoothAmp * 35;
 
     ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
     ctx.lineWidth = 2;
 
     ctx.beginPath();
 
-    const verticalScale = height / 2 * zoomScale * verticalFactor * bandAmp;
+    const verticalScale = height / 2 * zoomScale * verticalFactor * smoothAmp;
 
-    // Smooth jitter scaled by amplitude
-    const targetXJ = (Math.random() - 0.5) * sliceWidth * 0.15 * bandAmp;
-    const targetYJ = (Math.random() - 0.5) * verticalScale * 0.15 * bandAmp;
+    // Smoothed jitter scaled by smooth amplitude
+    const targetXJ = (Math.random() - 0.5) * sliceWidth * 0.15 * smoothAmp;
+    const targetYJ = (Math.random() - 0.5) * verticalScale * 0.15 * smoothAmp;
     bandState[band].xJitter += (targetXJ - bandState[band].xJitter) * 0.1;
     bandState[band].yJitter += (targetYJ - bandState[band].yJitter) * 0.1;
 
-    // Advance phase for horizontal movement
+    // Advance phase
     bandState[band].phase += 0.5 + band * 0.1;
 
     let x = 0;
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1;
 
-      // Compute x with phase shift and wrap around
       const xPos = (x + bandState[band].phase + bandState[band].xJitter) % width;
       const y = height / 2 + v * verticalScale + bandState[band].yJitter;
 
@@ -525,6 +524,7 @@ function drawWaveform() {
   }
 }
 
+
 drawWaveform();
 
 // --- INIT ---
@@ -532,6 +532,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
