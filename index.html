@@ -400,26 +400,17 @@ function resizeCanvasForDisplay() {
 }
 window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
-
 // Smooth zoom state
 let zoomScale = 1;
 
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
 
-  const displayWidth  = canvas.clientWidth;
-  const displayHeight = canvas.clientHeight;
-  if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-    canvas.width  = displayWidth;
-    canvas.height = displayHeight;
-  }
-  const width = canvas.width;
-  const height = canvas.height;
+  const width = canvas.width = canvas.clientWidth;
+  const height = canvas.height = canvas.clientHeight;
 
-  // Clear canvas completely (no trail)
   ctx.clearRect(0, 0, width, height);
 
-  // --- Audio data ---
   const bufferLength = analyser.fftSize;
   const timeData = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(timeData);
@@ -427,15 +418,14 @@ function drawWaveform() {
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  // --- Kick detection for zoom ---
-  const kickBins = 8; 
+  // Kick-driven zoom
   let kick = 0;
-  for (let i = 0; i < kickBins; i++) kick += freqData[i];
-  kick = kick / kickBins / 255;
+  for (let i = 0; i < 8; i++) kick += freqData[i];
+  kick = kick / 8 / 255;
   const targetZoom = 1 + kick * 0.25;
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
-  // --- Band definitions ---
+  // Band definitions (FFT index ranges)
   const bandRanges = [
     [0, Math.floor(freqData.length * 0.1)],    // Bass
     [Math.floor(freqData.length * 0.1), Math.floor(freqData.length * 0.3)], // Low mids
@@ -450,17 +440,15 @@ function drawWaveform() {
     [300, 80, 50]    // Treble: Magenta
   ];
 
-  const bandHeight = height / 4;
+  const sliceWidth = width / bufferLength;
 
-  // --- Draw each band in its own section ---
   for (let band = 0; band < 4; band++) {
     const [startIdx, endIdx] = bandRanges[band];
 
-    // Compute band amplitude for per-band pulse
+    // Compute average amplitude of this frequency band
     let ampSum = 0;
     for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
-    const bandAmp = ampSum / (endIdx - startIdx) / 255;
-    const pulse = 1 + bandAmp * 0.1;
+    const bandAmp = ampSum / (endIdx - startIdx) / 255; // 0..1
 
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
@@ -471,19 +459,16 @@ function drawWaveform() {
     ctx.lineWidth = 2;
 
     ctx.beginPath();
-    const sliceWidth = width / bufferLength;
     let x = 0;
-
     for (let i = 0; i < bufferLength; i++) {
-      const v = timeData[i] / 128.0 - 1; // [-1,1]
-      const y = band * bandHeight + bandHeight / 2 + (v * (bandHeight / 2) * pulse * zoomScale);
+      const v = (timeData[i] / 128.0 - 1); // [-1,1]
+      const y = height / 2 + v * height / 2 * bandAmp * zoomScale; // scale per band
 
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
 
       x += sliceWidth;
     }
-
     ctx.stroke();
   }
 }
@@ -495,6 +480,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
