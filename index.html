@@ -362,7 +362,7 @@ function safePrev() { safeAction(() => { userStopped = false; prevTrack(); }); }
 
 function highlightPlaying() {
   document.querySelectorAll(".track").forEach((el, idx) => {
-    el.classList.toggle("playing", idx === currentTrackIndex && currentSource);
+    el.classList.toggle("playing", idx === currentTrackIndex);
   });
 }
 
@@ -434,3 +434,4 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
