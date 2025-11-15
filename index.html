@@ -467,7 +467,7 @@ function drawWaveform() {
   }
   const normFactor = maxAmp > 0 ? 1 / maxAmp : 1;
 
-  const MIN_AMPLITUDE = 0.05;
+  const MIN_AMPLITUDE = 0.12;
 
   for (let band = 0; band < 4; band++) {
     let bandAmp = bandAmps[band] * normFactor;
@@ -540,6 +540,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
