@@ -400,7 +400,6 @@ function resizeCanvasForDisplay() {
 }
 window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
-// Smooth zoom state
 let zoomScale = 1;
 
 function drawWaveform() {
@@ -418,14 +417,13 @@ function drawWaveform() {
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  // Kick-driven zoom
+  // Kick zoom
   let kick = 0;
   for (let i = 0; i < 8; i++) kick += freqData[i];
   kick = kick / 8 / 255;
   const targetZoom = 1 + kick * 0.25;
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
-  // Band definitions (FFT index ranges)
   const bandRanges = [
     [0, Math.floor(freqData.length * 0.1)],    // Bass
     [Math.floor(freqData.length * 0.1), Math.floor(freqData.length * 0.3)], // Low mids
@@ -445,10 +443,12 @@ function drawWaveform() {
   for (let band = 0; band < 4; band++) {
     const [startIdx, endIdx] = bandRanges[band];
 
-    // Compute average amplitude of this frequency band
+    // Average amplitude for this band
     let ampSum = 0;
     for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
-    const bandAmp = ampSum / (endIdx - startIdx) / 255; // 0..1
+    const bandAmp = ampSum / (endIdx - startIdx) / 255;
+
+    if (bandAmp < 0.01) continue; // skip very quiet bands
 
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
@@ -460,13 +460,16 @@ function drawWaveform() {
 
     ctx.beginPath();
     let x = 0;
+
+    // Compute max scaling so band fits nicely in canvas
+    const verticalScale = height / 2 * zoomScale * (0.5 + bandAmp); // make low amplitude bands smaller
+
     for (let i = 0; i < bufferLength; i++) {
-      const v = (timeData[i] / 128.0 - 1); // [-1,1]
-      const y = height / 2 + v * height / 2 * bandAmp * zoomScale; // scale per band
+      const v = timeData[i] / 128.0 - 1; // [-1,1]
+      const y = height / 2 + v * verticalScale;
 
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
-
       x += sliceWidth;
     }
     ctx.stroke();
@@ -480,6 +483,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
