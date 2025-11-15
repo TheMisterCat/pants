@@ -404,34 +404,37 @@ resizeCanvasForDisplay();
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
 
+  // --- Resize canvas to match display size ---
+  const displayWidth  = canvas.clientWidth;
+  const displayHeight = canvas.clientHeight;
+  if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+    canvas.width  = displayWidth;
+    canvas.height = displayHeight;
+  }
   const width = canvas.width;
   const height = canvas.height;
 
-  // Fast, responsive fade (keeps motion crisp)
-  ctx.fillStyle = "rgba(0, 0, 0, 0.20)";
+  // Fade previous frame for short trail
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
   ctx.fillRect(0, 0, width, height);
 
-  // Time data for the waveform
+  // Time-domain waveform
   const bufferLength = analyser.fftSize;
   const timeData = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(timeData);
 
-  // Frequency data for color & bloom effects
+  // Frequency-domain data
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  const sliceWidth = width / bufferLength;
-
-  // Compute averaged bass level for pulsation
+  // Compute bass amplitude for pulsation
   let bass = 0;
   const bassBins = 16;
   for (let i = 0; i < bassBins; i++) bass += freqData[i];
-  bass = bass / bassBins / 255;  // 0–1
-  const bassPulse = 1 + bass * 0.25; // scale up waveform slightly on bass hits
+  bass = bass / bassBins / 255;
+  const bassPulse = 1 + bass * 0.25;
 
-  // ================
-  // BLOOM LAYERS
-  // ================
+  // --- Glow / Bloom layers ---
   function drawGlow(color, blur, alpha) {
     ctx.save();
     ctx.lineWidth = 4;
@@ -442,54 +445,41 @@ function drawWaveform() {
     ctx.beginPath();
 
     let x = 0;
-
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0;
       const y = (v * height / 2) * bassPulse + height / 2;
-
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
-
-      x += sliceWidth;
+      x += width / bufferLength;
     }
-
     ctx.stroke();
     ctx.restore();
   }
 
-  // Glow: soft outer → medium → inner (3 passes)
-  drawGlow("rgba(255, 255, 255, 0.5)", 25, 0.10); // outer halo
-  drawGlow("rgba(255, 255, 255, 0.8)", 12, 0.15); // mid glow
-  drawGlow("rgba(255, 255, 255, 1.0)", 5, 0.20);  // inner glow
+  drawGlow("rgba(255,255,255,0.5)", 25, 0.10);
+  drawGlow("rgba(255,255,255,0.8)", 12, 0.15);
+  drawGlow("rgba(255,255,255,1.0)", 5, 0.20);
 
-  // ============================
-  // MAIN MULTICOLOR FREQUENCY WAVEFORM
-  // ============================
+  // --- Main multicolor waveform ---
   ctx.lineWidth = 2;
-
   let x = 0;
-  for (let i = 1; i < bufferLength; i++) {
+  const sliceWidth = width / bufferLength;
 
-    // Local waveform coordinates
+  for (let i = 1; i < bufferLength; i++) {
     const v1 = timeData[i - 1] / 128.0;
     const v2 = timeData[i] / 128.0;
     const y1 = (v1 * height / 2) * bassPulse + height / 2;
     const y2 = (v2 * height / 2) * bassPulse + height / 2;
 
-    // Approximate local frequency → map waveform position into spectrum
     const freqIndex = Math.floor((i / bufferLength) * freqData.length);
-    const amp = freqData[freqIndex] / 255; // normalized 0–1
-    const freqRatio = freqIndex / freqData.length; // 0 = bass, 1 = treble
+    const amp = freqData[freqIndex] / 255;
+    const freqRatio = freqIndex / freqData.length;
 
-    // Multi-band gradient color:
-    // bass → red/orange
-    // mids → green/yellow
-    // highs → cyan/blue/magenta
-    const hue = freqRatio * 300; // 0 = red, 300 = violet
-    const light = 40 + amp * 35; // amplitude boosts lightness
+    const hue = freqRatio * 300;
+    const light = 40 + amp * 35;
+    const saturation = 90;
 
-    ctx.strokeStyle = `hsl(${hue}, 90%, ${light}%)`;
-
+    ctx.strokeStyle = `hsl(${hue}, ${saturation}%, ${light}%)`;
     ctx.beginPath();
     ctx.moveTo(x, y1);
     ctx.lineTo(x + sliceWidth, y2);
@@ -498,10 +488,8 @@ function drawWaveform() {
     x += sliceWidth;
   }
 
-  // ============================
-  // BASS REACTIVE BACKDROP
-  // ============================
-  const bassStrength = bass * 0.4; // subtle
+  // --- Bass-reactive background flash ---
+  const bassStrength = bass * 0.4;
   ctx.fillStyle = `rgba(255, 60, 0, ${bassStrength})`;
   ctx.fillRect(0, 0, width, height);
 }
@@ -512,6 +500,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
