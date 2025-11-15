@@ -400,14 +400,14 @@ function resizeCanvasForDisplay() {
 }
 window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
-
 let zoomScale = 1;
-// Maintain per-band smoothed jitter state
-const bandJitter = [
-  {x: 0, y: 0},
-  {x: 0, y: 0},
-  {x: 0, y: 0},
-  {x: 0, y: 0}
+
+// Keep per-band smoothed jitter and phase
+const bandState = [
+  {xJitter: 0, yJitter: 0, phase: 0},
+  {xJitter: 0, yJitter: 0, phase: 0},
+  {xJitter: 0, yJitter: 0, phase: 0},
+  {xJitter: 0, yJitter: 0, phase: 0}
 ];
 
 function drawWaveform() {
@@ -441,10 +441,10 @@ function drawWaveform() {
   ];
 
   const bandColors = [
-    [0, 100, 50],    // Bass
-    [60, 90, 50],    // Low mids
-    [180, 80, 50],   // High mids
-    [300, 80, 50]    // Treble
+    [0, 100, 50],    // Bass: Red
+    [60, 90, 50],    // Low mids: Green-yellow
+    [180, 80, 50],   // High mids: Cyan
+    [300, 80, 50]    // Treble: Magenta
   ];
 
   const sliceWidth = width / bufferLength;
@@ -463,7 +463,7 @@ function drawWaveform() {
   }
   const normFactor = maxAmp > 0 ? 1 / maxAmp : 1;
 
-  // --- Draw bands with smoothed jitter and horizontal offset ---
+  // --- Draw bands with smoothed jitter and phase shift ---
   for (let band = 0; band < 4; band++) {
     const [startFrac, endFrac] = bandRanges[band];
     const startIdx = Math.floor(startFrac * freqData.length);
@@ -481,7 +481,6 @@ function drawWaveform() {
       case 3: verticalFactor = 0.6; break;
     }
 
-    // Color
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
     const baseLight = bandColors[band][2];
@@ -491,22 +490,25 @@ function drawWaveform() {
 
     ctx.beginPath();
 
-    // Compute vertical scale
+    // Vertical scale
     const verticalScale = height / 2 * zoomScale * verticalFactor * bandAmp;
 
-    // Smooth per-frame jitter
-    const targetJitterX = (Math.random() - 0.5) * sliceWidth * 0.2;
-    const targetJitterY = (Math.random() - 0.5) * verticalScale * 0.2;
-    bandJitter[band].x += (targetJitterX - bandJitter[band].x) * 0.1;
-    bandJitter[band].y += (targetJitterY - bandJitter[band].y) * 0.1;
+    // Smooth jitter
+    const targetXJ = (Math.random() - 0.5) * sliceWidth * 0.15;
+    const targetYJ = (Math.random() - 0.5) * verticalScale * 0.15;
+    bandState[band].xJitter += (targetXJ - bandState[band].xJitter) * 0.1;
+    bandState[band].yJitter += (targetYJ - bandState[band].yJitter) * 0.1;
 
-    const hOffset = width / 4 * band; // static horizontal offset per band
+    // Advance phase for horizontal movement
+    bandState[band].phase += 0.5 + band * 0.1; // different speed per band
 
     let x = 0;
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1;
-      const y = height / 2 + v * verticalScale + bandJitter[band].y;
-      const xPos = x + bandJitter[band].x + hOffset;
+
+      // Compute x with phase shift and wrap around
+      let xPos = (x + bandState[band].phase + bandState[band].xJitter) % width;
+      const y = height / 2 + v * verticalScale + bandState[band].yJitter;
 
       if (i === 0) ctx.moveTo(xPos, y);
       else ctx.lineTo(xPos, y);
@@ -518,6 +520,7 @@ function drawWaveform() {
   }
 }
 
+
 drawWaveform();
 
 // --- INIT ---
@@ -525,6 +528,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
