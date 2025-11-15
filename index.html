@@ -425,11 +425,11 @@ function drawWaveform() {
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  // Kick-driven zoom (global)
+  // Kick-driven zoom
   let kick = 0;
   for (let i = 0; i < 8; i++) kick += freqData[i];
   kick = kick / 8 / 255;
-  const targetZoom = 1 + kick * 0.3; // slightly larger effect
+  const targetZoom = 1 + kick * 0.35; // slightly stronger zoom
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
   // Frequency bands
@@ -467,27 +467,21 @@ function drawWaveform() {
   }
   const normFactor = maxAmp > 0 ? 1 / maxAmp : 1;
 
-  const MIN_AMPLITUDE = 0.05; // increased threshold
+  const MIN_AMPLITUDE = 0.05;
 
   for (let band = 0; band < 4; band++) {
     let bandAmp = bandAmps[band] * normFactor;
 
-    // Smooth amplitude per band
+    // Smooth amplitude
     bandState[band].smoothAmp += (bandAmp - bandState[band].smoothAmp) * 0.05;
     const smoothAmp = bandState[band].smoothAmp;
 
-    if (smoothAmp < MIN_AMPLITUDE) continue; // skip near-silent bands
+    if (smoothAmp < MIN_AMPLITUDE) continue; // skip quiet bands
 
-    // Vertical scaling factor boost
-    let verticalFactor;
-    switch(band) {
-      case 0: verticalFactor = 1.5; break; // more boost for bass
-      case 1: verticalFactor = 1.3; break;
-      case 2: verticalFactor = 1.1; break;
-      case 3: verticalFactor = 0.9; break;
-    }
+    // Vertical scaling (overall boost)
+    let verticalFactor = 1.8; // all bands now overlap, full scaling
 
-    // Hue shift over time
+    // Hue shift
     bandState[band].hueShift += 0.3 + band * 0.1;
     const hue = (baseColors[band][0] + bandState[band].hueShift * smoothAmp) % 360;
     const sat = baseColors[band][1];
@@ -500,16 +494,16 @@ function drawWaveform() {
 
     const verticalScale = height / 2 * zoomScale * verticalFactor * smoothAmp;
 
-    // Smoothed jitter scaled by amplitude
+    // Smoothed jitter
     const targetXJ = (Math.random() - 0.5) * sliceWidth * 0.15 * smoothAmp;
     const targetYJ = (Math.random() - 0.5) * verticalScale * 0.15 * smoothAmp;
     bandState[band].xJitter += (targetXJ - bandState[band].xJitter) * 0.1;
     bandState[band].yJitter += (targetYJ - bandState[band].yJitter) * 0.1;
 
-    // Kick bounce: only affect bass band (0)
+    // Kick bounce for bass only
     if (band === 0) {
       const bassAmp = bandState[0].smoothAmp;
-      bandState[0].bounce += (bassAmp * 20 - bandState[0].bounce) * 0.1;
+      bandState[0].bounce += (bassAmp * 25 - bandState[0].bounce) * 0.1;
     }
     const bounceOffset = band === 0 ? bandState[0].bounce : 0;
 
@@ -521,13 +515,14 @@ function drawWaveform() {
     const prevWave = bandState[band].prevWave;
     const currentWave = new Array(bufferLength);
     let firstPoint = true;
+
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1;
       const prevV = prevWave[i] ?? 0;
-      const smoothV = prevV + (v - prevV) * 0.2; // smoothing factor
+      const smoothV = prevV + (v - prevV) * 0.25; // slightly stronger smoothing
       currentWave[i] = smoothV;
 
-      if (Math.abs(smoothV) < 0.005) continue;
+      if (Math.abs(smoothV) < 0.005) continue; // skip tiny fluctuations
 
       const xPos = (i * sliceWidth + bandState[band].phase + bandState[band].xJitter) % width;
       const y = height / 2 + smoothV * verticalScale + bandState[band].yJitter - bounceOffset;
@@ -535,14 +530,13 @@ function drawWaveform() {
       if (firstPoint) { ctx.moveTo(xPos, y); firstPoint = false; }
       else ctx.lineTo(xPos, y);
 
-      // Draw duplicate if near right edge for smooth wrapping
+      // Smooth wrapping at canvas edge
       if (xPos > width - sliceWidth) {
         ctx.lineTo(xPos - width, y);
       }
     }
 
     bandState[band].prevWave = currentWave;
-
     ctx.stroke();
   }
 }
@@ -554,6 +548,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
