@@ -1,162 +1,297 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Snake Game With Messages</title>
+<meta charset="UTF-8">
+<title>WebGL Snake — Kelly-Inspired Cute Face</title>
 <style>
   body {
-    background: #111;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin: 0;
-    font-family: sans-serif;
-    color: #fff;
+    background:#111;
+    margin:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    color:white;
+    font-family:sans-serif;
   }
-  #game {
-    border: 2px solid #0f0;
-    background: #000;
-    margin-top: 20px;
-    display: none;
+  #startBtn{
+    margin-top:40px;
+    padding:12px 28px;
+    background:#0f0;
+    border:none;
+    color:black;
+    font-size:20px;
+    border-radius:8px;
+    cursor:pointer;
   }
-  #startBtn {
-    margin-top: 50px;
-    padding: 12px 22px;
-    font-size: 20px;
-    border: none;
-    border-radius: 6px;
-    background: #0f0;
-    color: #000;
-    cursor: pointer;
-  }
-  #message {
-    margin-top: 20px;
-    font-size: 18px;
-    height: 24px;
-    color: #0f0;
-    text-align: center;
-  }
+  #glcanvas{ display:none; margin-top:20px; }
+  #message { height:30px; margin-top:15px; color:#0f0; font-size:18px; }
 </style>
 </head>
 <body>
 
 <button id="startBtn">START GAME</button>
-<canvas id="game" width="400" height="400"></canvas>
+<canvas id="glcanvas" width="480" height="480"></canvas>
 <div id="message"></div>
 
 <script>
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-const startBtn = document.getElementById("startBtn");
-const messageBox = document.getElementById("message");
+/* ==========================================================
+   BASIC WEBGL 2D RENDERER (QUADS)
+   ========================================================== */
+const canvas = document.getElementById("glcanvas");
+const gl = canvas.getContext("webgl");
 
-const tile = 20;
-let snake, dx, dy, food, gameOver, gameLoop;
+if(!gl){
+  alert("Your browser doesn't support WebGL.");
+}
 
-// Inspirational messages
-const messages = [
-  "Keep going — you're doing amazing!",
-  "Every bite makes you stronger!",
-  "Believe in your slithery self!",
-  "Success is just persistence in motion!",
+const VS = `
+attribute vec2 pos;
+attribute vec2 uv;
+varying vec2 vUV;
+void main(){
+  vUV = uv;
+  gl_Position = vec4(pos,0.0,1.0);
+}
+`;
+
+const FS = `
+precision mediump float;
+varying vec2 vUV;
+uniform sampler2D tex;
+void main(){
+  gl_FragColor = texture2D(tex, vUV);
+}
+`;
+
+// compile shaders
+function makeShader(type,src){
+  let s = gl.createShader(type);
+  gl.shaderSource(s,src);
+  gl.compileShader(s);
+  return s;
+}
+
+let prog = gl.createProgram();
+gl.attachShader(prog, makeShader(gl.VERTEX_SHADER,VS));
+gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER,FS));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const quad = new Float32Array([
+  -1,-1, 0,0,
+   1,-1, 1,0,
+  -1, 1, 0,1,
+   1, 1, 1,1
+]);
+
+let buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+let posLoc = gl.getAttribLocation(prog,"pos");
+let uvLoc  = gl.getAttribLocation(prog,"uv");
+gl.enableVertexAttribArray(posLoc);
+gl.enableVertexAttribArray(uvLoc);
+gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,16,0);
+gl.vertexAttribPointer(uvLoc,2,gl.FLOAT,false,16,8);
+
+/* ==========================================================
+   CREATE TEXTURE WITH A CUTE CARTOON “KELLY-ENERGY” FACE
+   ========================================================== */
+function makeFaceTexture(){
+  let c = document.createElement("canvas");
+  c.width = 64; c.height = 64;
+  let x = c.getContext("2d");
+
+  // background circle (head)
+  x.fillStyle = "#ffccdd";
+  x.beginPath(); x.arc(32,32,28,0,Math.PI*2); x.fill();
+
+  // eyes
+  x.fillStyle="black";
+  x.beginPath(); x.arc(22,26,5,0,Math.PI*2); x.fill();
+  x.beginPath(); x.arc(42,26,5,0,Math.PI*2); x.fill();
+
+  // smiling mouth
+  x.strokeStyle="red";
+  x.lineWidth=3;
+  x.beginPath();
+  x.arc(32,38,12,0,Math.PI);
+  x.stroke();
+
+  // sparkly “pop-star vibe”
+  x.fillStyle="white";
+  x.fillRect(20,23,3,3);
+  x.fillRect(40,23,3,3);
+
+  return loadTexture(c);
+}
+
+/* ==========================================================
+   SIMPLE RED SQUARE FOOD TEXTURE
+   ========================================================== */
+function makeFoodTexture(){
+  let c=document.createElement("canvas");
+  c.width=32; c.height=32;
+  let x=c.getContext("2d");
+  x.fillStyle="red";
+  x.fillRect(0,0,32,32);
+  return loadTexture(c);
+}
+
+/* ==========================================================
+   LOAD CANVAS AS WEBGL TEXTURE
+   ========================================================== */
+function loadTexture(canvas){
+  let t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  return t;
+}
+
+const faceTex = makeFaceTexture();
+const foodTex = makeFoodTexture();
+
+/* ==========================================================
+   GAME LOGIC (same as classic Snake but rendered in WebGL)
+   ========================================================== */
+let grid = 24;
+let tile = 1/grid * 2;  // normalized to WebGL coords
+
+let snake, dx, dy, food, alive, messages, lastTime;
+
+messages = [
+  "You shine bright!",
+  "Slay it, superstar!",
+  "Keep glowing!",
   "You're unstoppable!",
-  "Greatness grows with each step!",
-  "Stay focused — you got this!",
-  "Another bite, another victory!"
+  "Just like a pop anthem!",
+  "You’re doing amazing!",
+  "Snack time success!",
+  "Keep the rhythm going!"
 ];
 
-function resetGame() {
-  snake = [{ x: 200, y: 200 }];
-  dx = tile;
-  dy = 0;
-  food = randomFood();
-  gameOver = false;
-  messageBox.innerText = "";
-}
-
-function startGame() {
-  resetGame();
-  startBtn.style.display = "none";
-  canvas.style.display = "block";
-
-  gameLoop = setInterval(update, 120);
-}
-
-startBtn.addEventListener("click", startGame);
-
-document.addEventListener("keydown", control);
-
-function control(e) {
-  if ((e.key === "ArrowUp" || e.key === "w") && dy === 0) { dx = 0; dy = -tile; }
-  if ((e.key === "ArrowDown" || e.key === "s") && dy === 0) { dx = 0; dy = tile; }
-  if ((e.key === "ArrowLeft" || e.key === "a") && dx === 0) { dx = -tile; dy = 0; }
-  if ((e.key === "ArrowRight" || e.key === "d") && dx === 0) { dx = tile; dy = 0; }
-}
-
-function randomFood() {
+function randFood(){
   return {
-    x: Math.floor(Math.random() * 20) * tile,
-    y: Math.floor(Math.random() * 20) * tile
+    x: Math.floor(Math.random()*grid),
+    y: Math.floor(Math.random()*grid)
   };
 }
 
-function update() {
-  if (gameOver) return;
+function resetGame(){
+  snake=[{x:12,y:12}];
+  dx=1; dy=0;
+  food=randFood();
+  alive=true;
+  lastTime=0;
+}
 
-  const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+function drawTile(x,y,tex){
+  gl.bindTexture(gl.TEXTURE_2D, tex);
 
-  // wall collision
-  if (head.x < 0 || head.x >= 400 || head.y < 0 || head.y >= 400) {
-    endGame();
-    return;
-  }
+  // convert to -1..1 space
+  let px = (x/grid)*2 -1 + 1/grid;
+  let py = (y/grid)*2 -1 + 1/grid;
 
-  // self collision
-  for (let s of snake) {
-    if (head.x === s.x && head.y === s.y) {
-      endGame();
-      return;
+  // build a dynamic quad based on px,py
+  let s = 2/grid;
+  const quad = new Float32Array([
+    px,py, 0,0,
+    px+s,py, 1,0,
+    px,py+s, 0,1,
+    px+s,py+s, 1,1
+  ]);
+
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,16,0);
+  gl.vertexAttribPointer(uvLoc,2,gl.FLOAT,false,16,8);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+
+function update(now){
+  if(!alive) return;
+
+  if(now - lastTime > 120){
+    lastTime = now;
+
+    let head = { x:snake[0].x + dx, y: snake[0].y + dy };
+
+    // walls
+    if(head.x<0 || head.x>=grid || head.y<0 || head.y>=grid){
+      alive=false; endGame(); return;
+    }
+
+    // self
+    for(let s of snake){
+      if(s.x===head.x && s.y===head.y){
+        alive=false; endGame(); return;
+      }
+    }
+
+    snake.unshift(head);
+
+    // eat
+    if(head.x===food.x && head.y===food.y){
+      food = randFood();
+      showMessage();
+    } else {
+      snake.pop();
     }
   }
 
-  snake.unshift(head);
+  render();
+  requestAnimationFrame(update);
+}
 
-  // eat food
-  if (head.x === food.x && head.y === food.y) {
-    food = randomFood();
-    showMessage();
-  } else {
-    snake.pop();
+function render(){
+  gl.clearColor(0,0,0,1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  // draw snake
+  for(let i=0;i<snake.length;i++){
+    drawTile(snake[i].x, snake[i].y,
+      i===0 ? faceTex : faceTex
+    );
   }
 
-  draw();
+  // draw food
+  drawTile(food.x, food.y, foodTex);
 }
 
-function showMessage() {
-  const msg = messages[Math.floor(Math.random() * messages.length)];
-  messageBox.innerText = msg;
+/* ==========================================================
+   UI + INPUT
+   ========================================================== */
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowUp"||e.key==="w") if(dy===0){dx=0;dy=-1;}
+  if(e.key==="ArrowDown"||e.key==="s") if(dy===0){dx=0;dy=1;}
+  if(e.key==="ArrowLeft"||e.key==="a") if(dx===0){dx=-1;dy=0;}
+  if(e.key==="ArrowRight"||e.key==="d") if(dx===0){dx=1;dy=0;}
+});
+
+const startBtn=document.getElementById("startBtn");
+const messageBox=document.getElementById("message");
+
+startBtn.onclick=()=>{
+  startBtn.style.display="none";
+  canvas.style.display="block";
+  resetGame();
+  requestAnimationFrame(update);
+};
+
+function showMessage(){
+  messageBox.innerText = messages[Math.floor(Math.random()*messages.length)];
 }
 
-function endGame() {
-  clearInterval(gameLoop);
-  gameOver = true;
+function endGame(){
   alert("GAME OVER!");
-  canvas.style.display = "none";
-  startBtn.style.display = "block";
+  canvas.style.display="none";
+  startBtn.style.display="block";
+  messageBox.innerText="";
 }
 
-function draw() {
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, 400, 400);
-
-  ctx.fillStyle = "#0f0";
-  for (let s of snake) ctx.fillRect(s.x, s.y, tile, tile);
-
-  ctx.fillStyle = "red";
-  ctx.fillRect(food.x, food.y, tile, tile);
-}
 </script>
-
 </body>
 </html>
