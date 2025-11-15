@@ -404,52 +404,106 @@ resizeCanvasForDisplay();
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
 
-  // Smaller trail fade for more responsiveness (higher opacity = less persistence)
-  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const width = canvas.width;
+  const height = canvas.height;
 
-  // Time-domain waveform data
+  // Fast, responsive fade (keeps motion crisp)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.20)";
+  ctx.fillRect(0, 0, width, height);
+
+  // Time data for the waveform
   const bufferLength = analyser.fftSize;
   const timeData = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(timeData);
 
-  // Frequency-domain data
+  // Frequency data for color & bloom effects
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  const sliceWidth = canvas.width / bufferLength;
-  let x = 0;
+  const sliceWidth = width / bufferLength;
 
-  // Draw small waveform segments with locally-determined color
+  // Compute averaged bass level for pulsation
+  let bass = 0;
+  const bassBins = 16;
+  for (let i = 0; i < bassBins; i++) bass += freqData[i];
+  bass = bass / bassBins / 255;  // 0–1
+  const bassPulse = 1 + bass * 0.25; // scale up waveform slightly on bass hits
+
+  // ================
+  // BLOOM LAYERS
+  // ================
+  function drawGlow(color, blur, alpha) {
+    ctx.save();
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = blur;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const v = timeData[i] / 128.0;
+      const y = (v * height / 2) * bassPulse + height / 2;
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+
+      x += sliceWidth;
+    }
+
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Glow: soft outer → medium → inner (3 passes)
+  drawGlow("rgba(255, 255, 255, 0.5)", 25, 0.10); // outer halo
+  drawGlow("rgba(255, 255, 255, 0.8)", 12, 0.15); // mid glow
+  drawGlow("rgba(255, 255, 255, 1.0)", 5, 0.20);  // inner glow
+
+  // ============================
+  // MAIN MULTICOLOR FREQUENCY WAVEFORM
+  // ============================
+  ctx.lineWidth = 2;
+
+  let x = 0;
   for (let i = 1; i < bufferLength; i++) {
+
+    // Local waveform coordinates
     const v1 = timeData[i - 1] / 128.0;
     const v2 = timeData[i] / 128.0;
+    const y1 = (v1 * height / 2) * bassPulse + height / 2;
+    const y2 = (v2 * height / 2) * bassPulse + height / 2;
 
-    const y1 = (v1 * canvas.height) / 2;
-    const y2 = (v2 * canvas.height) / 2;
-
-    // Map sample index to a frequency bin (approx)
+    // Approximate local frequency → map waveform position into spectrum
     const freqIndex = Math.floor((i / bufferLength) * freqData.length);
     const amp = freqData[freqIndex] / 255; // normalized 0–1
+    const freqRatio = freqIndex / freqData.length; // 0 = bass, 1 = treble
 
-    // Color based on frequency amplitude:
-    //   Bass (low index): tends toward red
-    //   Mids: yellow/green
-    //   Highs: blue/cyan
-    const hue = (freqIndex / freqData.length) * 300; // 0 = red, 300 = violet
-    const lightness = 40 + amp * 30;  // stronger amplitude = brighter
-    const saturation = 80;            // vivid color
+    // Multi-band gradient color:
+    // bass → red/orange
+    // mids → green/yellow
+    // highs → cyan/blue/magenta
+    const hue = freqRatio * 300; // 0 = red, 300 = violet
+    const light = 40 + amp * 35; // amplitude boosts lightness
 
-    ctx.strokeStyle = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = `hsl(${hue}, 90%, ${light}%)`;
 
     ctx.beginPath();
-    ctx.moveTo(x - sliceWidth, y1);
-    ctx.lineTo(x, y2);
+    ctx.moveTo(x, y1);
+    ctx.lineTo(x + sliceWidth, y2);
     ctx.stroke();
 
     x += sliceWidth;
   }
+
+  // ============================
+  // BASS REACTIVE BACKDROP
+  // ============================
+  const bassStrength = bass * 0.4; // subtle
+  ctx.fillStyle = `rgba(255, 60, 0, ${bassStrength})`;
+  ctx.fillRect(0, 0, width, height);
 }
 drawWaveform();
 
@@ -458,6 +512,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
