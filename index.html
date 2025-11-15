@@ -3,14 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Snake Game</title>
+<title>Snake Game With Messages</title>
 <style>
   body {
     background: #111;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
     align-items: center;
-    height: 100vh;
     margin: 0;
     font-family: sans-serif;
     color: #fff;
@@ -18,31 +17,81 @@
   #game {
     border: 2px solid #0f0;
     background: #000;
+    margin-top: 20px;
+    display: none;
+  }
+  #startBtn {
+    margin-top: 50px;
+    padding: 12px 22px;
+    font-size: 20px;
+    border: none;
+    border-radius: 6px;
+    background: #0f0;
+    color: #000;
+    cursor: pointer;
+  }
+  #message {
+    margin-top: 20px;
+    font-size: 18px;
+    height: 24px;
+    color: #0f0;
+    text-align: center;
   }
 </style>
 </head>
 <body>
 
+<button id="startBtn">START GAME</button>
 <canvas id="game" width="400" height="400"></canvas>
+<div id="message"></div>
 
 <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+const startBtn = document.getElementById("startBtn");
+const messageBox = document.getElementById("message");
 
 const tile = 20;
-let snake = [{ x: 200, y: 200 }];
-let dx = tile;
-let dy = 0;
-let food = randomFood();
-let gameOver = false;
+let snake, dx, dy, food, gameOver, gameLoop;
+
+// Inspirational messages
+const messages = [
+  "Keep going — you're doing amazing!",
+  "Every bite makes you stronger!",
+  "Believe in your slithery self!",
+  "Success is just persistence in motion!",
+  "You're unstoppable!",
+  "Greatness grows with each step!",
+  "Stay focused — you got this!",
+  "Another bite, another victory!"
+];
+
+function resetGame() {
+  snake = [{ x: 200, y: 200 }];
+  dx = tile;
+  dy = 0;
+  food = randomFood();
+  gameOver = false;
+  messageBox.innerText = "";
+}
+
+function startGame() {
+  resetGame();
+  startBtn.style.display = "none";
+  canvas.style.display = "block";
+
+  gameLoop = setInterval(update, 120);
+}
+
+startBtn.addEventListener("click", startGame);
 
 document.addEventListener("keydown", control);
 
 function control(e) {
-  if (e.key === "ArrowUp" || e.key === "w") { if (dy === 0) { dx = 0; dy = -tile; } }
-  if (e.key === "ArrowDown" || e.key === "s") { if (dy === 0) { dx = 0; dy = tile; } }
-  if (e.key === "ArrowLeft" || e.key === "a") { if (dx === 0) { dx = -tile; dy = 0; } }
-  if (e.key === "ArrowRight" || e.key === "d") { if (dx === 0) { dx = tile; dy = 0; } }
+  if ((e.key === "ArrowUp" || e.key === "w") && dy === 0) { dx = 0; dy = -tile; }
+  if ((e.key === "ArrowDown" || e.key === "s") && dy === 0) { dx = 0; dy = tile; }
+  if ((e.key === "ArrowLeft" || e.key === "a") && dx === 0) { dx = -tile; dy = 0; }
+  if ((e.key === "ArrowRight" || e.key === "d") && dx === 0) { dx = tile; dy = 0; }
 }
 
 function randomFood() {
@@ -59,16 +108,14 @@ function update() {
 
   // wall collision
   if (head.x < 0 || head.x >= 400 || head.y < 0 || head.y >= 400) {
-    gameOver = true;
-    alert("GAME OVER!");
+    endGame();
     return;
   }
 
   // self collision
   for (let s of snake) {
     if (head.x === s.x && head.y === s.y) {
-      gameOver = true;
-      alert("GAME OVER!");
+      endGame();
       return;
     }
   }
@@ -78,6 +125,7 @@ function update() {
   // eat food
   if (head.x === food.x && head.y === food.y) {
     food = randomFood();
+    showMessage();
   } else {
     snake.pop();
   }
@@ -85,20 +133,29 @@ function update() {
   draw();
 }
 
+function showMessage() {
+  const msg = messages[Math.floor(Math.random() * messages.length)];
+  messageBox.innerText = msg;
+}
+
+function endGame() {
+  clearInterval(gameLoop);
+  gameOver = true;
+  alert("GAME OVER!");
+  canvas.style.display = "none";
+  startBtn.style.display = "block";
+}
+
 function draw() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, 400, 400);
 
-  // snake
   ctx.fillStyle = "#0f0";
   for (let s of snake) ctx.fillRect(s.x, s.y, tile, tile);
 
-  // food
   ctx.fillStyle = "red";
   ctx.fillRect(food.x, food.y, tile, tile);
 }
-
-setInterval(update, 120);
 </script>
 
 </body>
