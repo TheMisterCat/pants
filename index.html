@@ -417,17 +417,19 @@ function drawWaveform() {
   const freqData = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(freqData);
 
-  // Kick zoom
+  // Kick-driven zoom
   let kick = 0;
   for (let i = 0; i < 8; i++) kick += freqData[i];
   kick = kick / 8 / 255;
   const targetZoom = 1 + kick * 0.25;
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
+  // --- Split FFT into 4 bands with gaps ---
+  // non-contiguous ranges to leave small empty bands
   const bandRanges = [
-    [0, Math.floor(freqData.length * 0.1)],    // Bass
-    [Math.floor(freqData.length * 0.1), Math.floor(freqData.length * 0.3)], // Low mids
-    [Math.floor(freqData.length * 0.3), Math.floor(freqData.length * 0.6)], // High mids
+    [0, Math.floor(freqData.length * 0.08)],    // Bass
+    [Math.floor(freqData.length * 0.12), Math.floor(freqData.length * 0.28)], // Low mids
+    [Math.floor(freqData.length * 0.32), Math.floor(freqData.length * 0.55)], // High mids
     [Math.floor(freqData.length * 0.6), freqData.length] // Treble
   ];
 
@@ -443,12 +445,21 @@ function drawWaveform() {
   for (let band = 0; band < 4; band++) {
     const [startIdx, endIdx] = bandRanges[band];
 
-    // Average amplitude for this band
+    // Average amplitude for the band
     let ampSum = 0;
     for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
-    const bandAmp = ampSum / (endIdx - startIdx) / 255;
+    const bandAmp = ampSum / Math.max(1, endIdx - startIdx) / 255;
 
-    if (bandAmp < 0.01) continue; // skip very quiet bands
+    if (bandAmp < 0.01) continue; // ignore very quiet bands
+
+    // Per-band vertical scaling to emphasize separation
+    let verticalFactor;
+    switch(band) {
+      case 0: verticalFactor = 1.2; break; // bass = thickest
+      case 1: verticalFactor = 1.0; break; // low mids
+      case 2: verticalFactor = 0.8; break; // high mids
+      case 3: verticalFactor = 0.6; break; // treble = thinnest
+    }
 
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
@@ -460,9 +471,7 @@ function drawWaveform() {
 
     ctx.beginPath();
     let x = 0;
-
-    // Compute max scaling so band fits nicely in canvas
-    const verticalScale = height / 2 * zoomScale * (0.5 + bandAmp); // make low amplitude bands smaller
+    const verticalScale = height / 2 * zoomScale * verticalFactor * bandAmp;
 
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1; // [-1,1]
@@ -472,6 +481,7 @@ function drawWaveform() {
       else ctx.lineTo(x, y);
       x += sliceWidth;
     }
+
     ctx.stroke();
   }
 }
@@ -483,6 +493,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
