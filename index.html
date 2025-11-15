@@ -416,9 +416,8 @@ function drawWaveform() {
   const width = canvas.width;
   const height = canvas.height;
 
-  // Fade previous frame lightly for trail effect
-  ctx.fillStyle = "rgba(0,0,0,0.2)";
-  ctx.fillRect(0, 0, width, height);
+  // Clear canvas completely (no trail)
+  ctx.clearRect(0, 0, width, height);
 
   // --- Audio data ---
   const bufferLength = analyser.fftSize;
@@ -429,7 +428,7 @@ function drawWaveform() {
   analyser.getByteFrequencyData(freqData);
 
   // --- Kick detection for zoom ---
-  const kickBins = 8;
+  const kickBins = 8; 
   let kick = 0;
   for (let i = 0; i < kickBins; i++) kick += freqData[i];
   kick = kick / kickBins / 255;
@@ -451,45 +450,41 @@ function drawWaveform() {
     [300, 80, 50]    // Treble: Magenta
   ];
 
-  // --- Draw each band separately ---
+  const bandHeight = height / 4;
+
+  // --- Draw each band in its own section ---
   for (let band = 0; band < 4; band++) {
     const [startIdx, endIdx] = bandRanges[band];
 
-    // Band amplitude for subtle pulse
+    // Compute band amplitude for per-band pulse
     let ampSum = 0;
     for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
     const bandAmp = ampSum / (endIdx - startIdx) / 255;
     const pulse = 1 + bandAmp * 0.1;
 
-    // Begin band stroke with glow
-    ctx.save();
-    ctx.lineWidth = 2;
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
     const baseLight = bandColors[band][2];
     const light = baseLight + bandAmp * 35;
 
     ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
-
-    ctx.shadowColor = ctx.strokeStyle;
-    ctx.shadowBlur = 10;
-    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 2;
 
     ctx.beginPath();
-    let x = 0;
     const sliceWidth = width / bufferLength;
+    let x = 0;
 
     for (let i = 0; i < bufferLength; i++) {
-      const v = timeData[i] / 128.0 - 1;
-      const y = (v * height / 2) * pulse * zoomScale + height / 2;
+      const v = timeData[i] / 128.0 - 1; // [-1,1]
+      const y = band * bandHeight + bandHeight / 2 + (v * (bandHeight / 2) * pulse * zoomScale);
 
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
+
       x += sliceWidth;
     }
 
     ctx.stroke();
-    ctx.restore();
   }
 }
 
@@ -500,6 +495,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
