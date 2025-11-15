@@ -403,6 +403,9 @@ resizeCanvasForDisplay();
 
 let zoomScale = 1;
 
+// Smooth zoom state
+let zoomScale = 1;
+
 function drawWaveform() {
   requestAnimationFrame(drawWaveform);
 
@@ -428,16 +431,14 @@ function drawWaveform() {
   analyser.getByteFrequencyData(freqData);
 
   // --- Kick detection for zoom ---
-  const kickBins = 8; // low-frequency bins
+  const kickBins = 8;
   let kick = 0;
   for (let i = 0; i < kickBins; i++) kick += freqData[i];
   kick = kick / kickBins / 255;
+  const targetZoom = 1 + kick * 0.25;
+  zoomScale += (targetZoom - zoomScale) * 0.2;
 
-  // Smooth zoom scale (1 = normal, >1 = zoomed)
-  const targetZoom = 1 + kick * 0.25; // max +25% scale
-  zoomScale += (targetZoom - zoomScale) * 0.2; // smooth transition
-
-  // --- Four bands ---
+  // --- Band definitions ---
   const bandRanges = [
     [0, Math.floor(freqData.length * 0.1)],    // Bass
     [Math.floor(freqData.length * 0.1), Math.floor(freqData.length * 0.3)], // Low mids
@@ -446,24 +447,35 @@ function drawWaveform() {
   ];
 
   const bandColors = [
-    [0, 100, 50],   // Bass: Red-ish
-    [60, 90, 50],   // Low mids: Green-yellow
-    [180, 80, 50],  // High mids: Cyan
-    [300, 80, 50]   // Treble: Magenta
+    [0, 100, 50],    // Bass: Red
+    [60, 90, 50],    // Low mids: Green-yellow
+    [180, 80, 50],   // High mids: Cyan
+    [300, 80, 50]    // Treble: Magenta
   ];
 
-  // --- Draw each band ---
+  // --- Draw each band separately ---
   for (let band = 0; band < 4; band++) {
     const [startIdx, endIdx] = bandRanges[band];
 
-    // Band amplitude for slight individual pulse
+    // Band amplitude for subtle pulse
     let ampSum = 0;
     for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
     const bandAmp = ampSum / (endIdx - startIdx) / 255;
-    const pulse = 1 + bandAmp * 0.1; // small pulse per band
+    const pulse = 1 + bandAmp * 0.1;
 
+    // Begin band stroke with glow
+    ctx.save();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = `hsl(${bandColors[band][0]}, ${bandColors[band][1]}%, ${bandColors[band][2] + bandAmp*35}%)`;
+    const hue = bandColors[band][0];
+    const sat = bandColors[band][1];
+    const baseLight = bandColors[band][2];
+    const light = baseLight + bandAmp * 35;
+
+    ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
+
+    ctx.shadowColor = ctx.strokeStyle;
+    ctx.shadowBlur = 10;
+    ctx.globalAlpha = 0.9;
 
     ctx.beginPath();
     let x = 0;
@@ -471,25 +483,18 @@ function drawWaveform() {
 
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1;
-      // --- APPLY ZOOM BOUNCE ---
       const y = (v * height / 2) * pulse * zoomScale + height / 2;
 
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
-
       x += sliceWidth;
     }
-    ctx.stroke();
 
-    // Optional faint glow per band
-    ctx.save();
-    ctx.shadowColor = ctx.strokeStyle;
-    ctx.shadowBlur = 10;
-    ctx.globalAlpha = 0.08;
     ctx.stroke();
     ctx.restore();
   }
 }
+
 drawWaveform();
 
 // --- INIT ---
@@ -497,6 +502,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
