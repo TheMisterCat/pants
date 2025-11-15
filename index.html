@@ -402,56 +402,7 @@ window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
 
 let zoomScale = 1;
-
-function drawWaveform() {
-  requestAnimationFrame(drawWaveform);
-
-  const width = canvas.width = canvas.clientWidth;
-  const height = canvas.height = canvas.clientHeight;
-
-  ctx.clearRect(0, 0, width, height);
-
-  const bufferLength = analyser.fftSize;
-  const timeData = new Uint8Array(bufferLength);
-  analyser.getByteTimeDomainData(timeData);
-
-  const freqData = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(freqData);
-
-  // Kick-driven zoom
-  let kick = 0;
-  for (let i = 0; i < 8; i++) kick += freqData[i];
-  kick = kick / 8 / 255;
-  const targetZoom = 1 + kick * 0.25;
-  zoomScale += (targetZoom - zoomScale) * 0.2;
-
-  // --- Frequency bands with small gaps (~0.05) ---
-  const bandRanges = [
-    [0.02, 0.08],   // Bass
-    [0.15, 0.25],   // Low mids
-    [0.35, 0.50],   // High mids
-    [0.6, 0.75]     // Treble
-  ];
-
-  const bandColors = [
-    [0, 100, 50],    // Bass: Red
-    [60, 90, 50],    // Low mids: Green-yellow
-    [180, 80, 50],   // High mids: Cyan
-    [300, 80, 50]    // Treble: Magenta
-  ];
-
-  const sliceWidth = width / bufferLength;
-
-  // --- Compute max amplitude across all bands for normalization ---
-  let maxAmp = 0;
-  const bandAmps = [];
-  for (let band = 0; band < 4; band++) {
-    const startIdx = Math.floor(bandRanges[band][0] * freqData.length);
-    const endIdx = Math.floor(bandRanges[band][1] * freqData.length);
-    let sum = 0;
-    for (let i = startIdx; i < endIdx; i++) sum += freqData[i];
-    const amp = sum / Math.max(1, endIdx - startIdx);
-    bandAmps[band] = amp;// Maintain per-band smoothed jitter state
+// Maintain per-band smoothed jitter state
 const bandJitter = [
   {x: 0, y: 0},
   {x: 0, y: 0},
@@ -567,7 +518,6 @@ function drawWaveform() {
   }
 }
 
-
 drawWaveform();
 
 // --- INIT ---
@@ -575,6 +525,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
