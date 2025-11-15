@@ -451,52 +451,122 @@ function drawWaveform() {
     let sum = 0;
     for (let i = startIdx; i < endIdx; i++) sum += freqData[i];
     const amp = sum / Math.max(1, endIdx - startIdx);
+    bandAmps[band] = amp;// Maintain per-band smoothed jitter state
+const bandJitter = [
+  {x: 0, y: 0},
+  {x: 0, y: 0},
+  {x: 0, y: 0},
+  {x: 0, y: 0}
+];
+
+function drawWaveform() {
+  requestAnimationFrame(drawWaveform);
+
+  const width = canvas.width = canvas.clientWidth;
+  const height = canvas.height = canvas.clientHeight;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const bufferLength = analyser.fftSize;
+  const timeData = new Uint8Array(bufferLength);
+  analyser.getByteTimeDomainData(timeData);
+
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(freqData);
+
+  // Kick-driven zoom
+  let kick = 0;
+  for (let i = 0; i < 8; i++) kick += freqData[i];
+  kick = kick / 8 / 255;
+  const targetZoom = 1 + kick * 0.25;
+  zoomScale += (targetZoom - zoomScale) * 0.2;
+
+  // --- Frequency bands ---
+  const bandRanges = [
+    [0.02, 0.08],   // Bass
+    [0.15, 0.25],   // Low mids
+    [0.35, 0.50],   // High mids
+    [0.6, 0.75]     // Treble
+  ];
+
+  const bandColors = [
+    [0, 100, 50],    // Bass
+    [60, 90, 50],    // Low mids
+    [180, 80, 50],   // High mids
+    [300, 80, 50]    // Treble
+  ];
+
+  const sliceWidth = width / bufferLength;
+
+  // --- Compute max amplitude for normalization ---
+  let maxAmp = 0;
+  const bandAmps = [];
+  for (let band = 0; band < 4; band++) {
+    const startIdx = Math.floor(bandRanges[band][0] * freqData.length);
+    const endIdx = Math.floor(bandRanges[band][1] * freqData.length);
+    let sum = 0;
+    for (let i = startIdx; i < endIdx; i++) sum += freqData[i];
+    const amp = sum / Math.max(1, endIdx - startIdx);
     bandAmps[band] = amp;
     if (amp > maxAmp) maxAmp = amp;
   }
   const normFactor = maxAmp > 0 ? 1 / maxAmp : 1;
 
-  // --- Draw bands ---
+  // --- Draw bands with smoothed jitter and horizontal offset ---
   for (let band = 0; band < 4; band++) {
     const [startFrac, endFrac] = bandRanges[band];
     const startIdx = Math.floor(startFrac * freqData.length);
     const endIdx = Math.floor(endFrac * freqData.length);
 
-    const bandAmp = bandAmps[band] * normFactor; // normalized 0..1
-    if (bandAmp < 0.01) continue; // skip silent bands
+    const bandAmp = bandAmps[band] * normFactor;
+    if (bandAmp < 0.01) continue;
 
     // Per-band vertical scaling factor
     let verticalFactor;
     switch(band) {
-      case 0: verticalFactor = 1.2; break; // bass thick
-      case 1: verticalFactor = 1.0; break; // low mids
-      case 2: verticalFactor = 0.8; break; // high mids
-      case 3: verticalFactor = 0.6; break; // treble thin
+      case 0: verticalFactor = 1.2; break;
+      case 1: verticalFactor = 1.0; break;
+      case 2: verticalFactor = 0.8; break;
+      case 3: verticalFactor = 0.6; break;
     }
 
+    // Color
     const hue = bandColors[band][0];
     const sat = bandColors[band][1];
     const baseLight = bandColors[band][2];
     const light = baseLight + bandAmp * 35;
-
     ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${light}%)`;
     ctx.lineWidth = 2;
 
     ctx.beginPath();
-    let x = 0;
+
+    // Compute vertical scale
     const verticalScale = height / 2 * zoomScale * verticalFactor * bandAmp;
 
+    // Smooth per-frame jitter
+    const targetJitterX = (Math.random() - 0.5) * sliceWidth * 0.2;
+    const targetJitterY = (Math.random() - 0.5) * verticalScale * 0.2;
+    bandJitter[band].x += (targetJitterX - bandJitter[band].x) * 0.1;
+    bandJitter[band].y += (targetJitterY - bandJitter[band].y) * 0.1;
+
+    const hOffset = width / 4 * band; // static horizontal offset per band
+
+    let x = 0;
     for (let i = 0; i < bufferLength; i++) {
       const v = timeData[i] / 128.0 - 1;
-      const y = height / 2 + v * verticalScale;
+      const y = height / 2 + v * verticalScale + bandJitter[band].y;
+      const xPos = x + bandJitter[band].x + hOffset;
 
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (i === 0) ctx.moveTo(xPos, y);
+      else ctx.lineTo(xPos, y);
+
       x += sliceWidth;
     }
+
     ctx.stroke();
   }
 }
+
 
 drawWaveform();
 
@@ -505,6 +575,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
