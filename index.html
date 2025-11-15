@@ -400,6 +400,7 @@ function resizeCanvasForDisplay() {
 }
 window.addEventListener('resize', resizeCanvasForDisplay);
 resizeCanvasForDisplay();
+
 let zoomScale = 1;
 
 function drawWaveform() {
@@ -424,13 +425,12 @@ function drawWaveform() {
   const targetZoom = 1 + kick * 0.25;
   zoomScale += (targetZoom - zoomScale) * 0.2;
 
-  // --- Split FFT into 4 bands with gaps ---
-  // non-contiguous ranges to leave small empty bands
+  // --- Frequency bands with small gaps (~0.05) ---
   const bandRanges = [
-    [0, Math.floor(freqData.length * 0.08)],    // Bass
-    [Math.floor(freqData.length * 0.12), Math.floor(freqData.length * 0.28)], // Low mids
-    [Math.floor(freqData.length * 0.32), Math.floor(freqData.length * 0.55)], // High mids
-    [Math.floor(freqData.length * 0.6), freqData.length] // Treble
+    [0.00, 0.08],   // Bass
+    [0.12, 0.28],   // Low mids
+    [0.37, 0.50],   // High mids
+    [0.55, 1.0]     // Treble
   ];
 
   const bandColors = [
@@ -442,23 +442,36 @@ function drawWaveform() {
 
   const sliceWidth = width / bufferLength;
 
+  // --- Compute max amplitude across all bands for normalization ---
+  let maxAmp = 0;
+  const bandAmps = [];
   for (let band = 0; band < 4; band++) {
-    const [startIdx, endIdx] = bandRanges[band];
+    const startIdx = Math.floor(bandRanges[band][0] * freqData.length);
+    const endIdx = Math.floor(bandRanges[band][1] * freqData.length);
+    let sum = 0;
+    for (let i = startIdx; i < endIdx; i++) sum += freqData[i];
+    const amp = sum / Math.max(1, endIdx - startIdx);
+    bandAmps[band] = amp;
+    if (amp > maxAmp) maxAmp = amp;
+  }
+  const normFactor = maxAmp > 0 ? 1 / maxAmp : 1;
 
-    // Average amplitude for the band
-    let ampSum = 0;
-    for (let i = startIdx; i < endIdx; i++) ampSum += freqData[i];
-    const bandAmp = ampSum / Math.max(1, endIdx - startIdx) / 255;
+  // --- Draw bands ---
+  for (let band = 0; band < 4; band++) {
+    const [startFrac, endFrac] = bandRanges[band];
+    const startIdx = Math.floor(startFrac * freqData.length);
+    const endIdx = Math.floor(endFrac * freqData.length);
 
-    if (bandAmp < 0.01) continue; // ignore very quiet bands
+    const bandAmp = bandAmps[band] * normFactor; // normalized 0..1
+    if (bandAmp < 0.01) continue; // skip silent bands
 
-    // Per-band vertical scaling to emphasize separation
+    // Per-band vertical scaling factor
     let verticalFactor;
     switch(band) {
-      case 0: verticalFactor = 1.2; break; // bass = thickest
+      case 0: verticalFactor = 1.2; break; // bass thick
       case 1: verticalFactor = 1.0; break; // low mids
       case 2: verticalFactor = 0.8; break; // high mids
-      case 3: verticalFactor = 0.6; break; // treble = thinnest
+      case 3: verticalFactor = 0.6; break; // treble thin
     }
 
     const hue = bandColors[band][0];
@@ -474,14 +487,13 @@ function drawWaveform() {
     const verticalScale = height / 2 * zoomScale * verticalFactor * bandAmp;
 
     for (let i = 0; i < bufferLength; i++) {
-      const v = timeData[i] / 128.0 - 1; // [-1,1]
+      const v = timeData[i] / 128.0 - 1;
       const y = height / 2 + v * verticalScale;
 
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       x += sliceWidth;
     }
-
     ctx.stroke();
   }
 }
@@ -493,6 +505,7 @@ fetchPlaylist();
 </script>
 </body>
 </html>
+
 
 
 
