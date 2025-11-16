@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FFT Dominant Frequency Analyzer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      max-width: 700px;
+    }
+    #freq {
+      font-size: 2em;
+      margin-top: 20px;
+      color: #0a74da;
+    }
+  </style>
+</head>
+<body>
+  <h2>Audio Dominant Frequency Analyzer</h2>
+  <input type="file" id="fileInput" accept=".mp3,.wav,.ogg,audio/*"><br><br>
+  
+  <button id="analyzeBtn" disabled>Analyze</button>
+
+  <div id="freq">Dominant frequency: —</div>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const analyzeBtn = document.getElementById("analyzeBtn");
+    const freqLabel = document.getElementById("freq");
+
+    let audioBuffer = null;
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const arrayBuffer = await file.arrayBuffer();
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+      analyzeBtn.disabled = false;
+      freqLabel.textContent = "File loaded. Ready to analyze.";
+    });
+
+    analyzeBtn.addEventListener("click", async () => {
+      if (!audioBuffer) return;
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32768;          // High resolution
+      const freqData = new Uint8Array(analyser.frequencyBinCount);
+
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+
+      source.start(0);
+
+      // Capture FFT after a small delay to allow audio to begin
+      setTimeout(() => {
+        analyser.getByteFrequencyData(freqData);
+
+        const sampleRate = audioCtx.sampleRate;
+        const binCount = analyser.frequencyBinCount;
+
+        // Find index of max magnitude
+        let maxIndex = 0;
+        for (let i = 1; i < binCount; i++) {
+          if (freqData[i] > freqData[maxIndex]) maxIndex = i;
+        }
+
+        const dominantFreq = (maxIndex * sampleRate) / analyser.fftSize;
+
+        freqLabel.textContent = `Dominant frequency: ${dominantFreq.toFixed(2)} Hz`;
+
+        source.stop();
+      }, 300); // 300 ms delay for reliable FFT
+    });
+  </script>
+</body>
+</html>
